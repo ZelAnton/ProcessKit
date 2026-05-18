@@ -190,18 +190,13 @@
 - Write commit subjects with these prefixes when you want them to land in the right bucket without editing `CHANGELOG.md`.
 - If the auto-fill produces no entries (e.g. only skipped commits since the previous tag), the release fails with a clear error — add a manual entry to unblock it.
 
-## Release Signing And Checksums
+## Release Checksums
 
-- The release workflow (`.github/workflows/release.yml`) signs both `.nupkg` and `.snupkg` with the `AntonZhelezniakou-CodeSigning` certificate before pushing to NuGet.org. The artifact pushed to NuGet.org and the asset attached to the GitHub Release are byte-identical and both carry the signature.
-- The public certificate is committed at `certificates/AntonZhelezniakou-CodeSigning.cer`. Do not move or delete it — consumers verify signatures against this file.
-- Signing requires three repository secrets:
-	- `CODE_SIGNING_PFX_BASE64` — base64-encoded `.pfx` (private key + chain)
-	- `CODE_SIGNING_PFX_PASSWORD` — password for the `.pfx`
+- The release workflow (`.github/workflows/release.yml`) does **not** author-sign the `.nupkg`/`.snupkg`. NuGet.org adds a repository signature on the publisher account automatically; that is what attributes the package to the `ProcessKit` owner.
+- A `SHA256SUMS` manifest is generated from the packed artifacts and attached to the GitHub Release. Format is the standard `<hex>  <filename>` consumed by `sha256sum -c` — this is how downstream consumers verify integrity of artifacts downloaded from the GitHub Release.
+- Publishing requires one repository secret:
 	- `NUGET_API_KEY` — nuget.org API key with push permission for the `ProcessKit` package
-- Do not embed the `.pfx` or its password in the repository or in any committed file. The PFX is decoded into `$RUNNER_TEMP`, consumed by `dotnet nuget sign`, and shredded immediately after use.
-- Signing happens **before** `dotnet nuget push` and before `gh release create`, so a missing secret or a signing failure aborts the release without publishing an unsigned package or tagging a partial release.
-- A `SHA256SUMS` manifest is generated from the signed artifacts and attached to the GitHub Release. Format is the standard `<hex>  <filename>` consumed by `sha256sum -c`.
-- Do not change the signing timestamp authority (`http://timestamp.digicert.com`) without a documented reason — without a valid timestamp the signature becomes invalid once the certificate expires.
+- Do not reintroduce `dotnet nuget sign` against a self-signed certificate: nuget.org validates the author signature's certificate chain against the Microsoft Trusted Root Program and rejects self-signed packages with `NU3018`. If author-signing is brought back later, the cert must be from a public CA.
 
 ## Security Scanning
 

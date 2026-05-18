@@ -190,32 +190,6 @@ jobs:
       - name: Pack
         run: dotnet pack src/ProcessKit/ProcessKit.csproj --no-build --configuration Release --output ./artifacts /p:Version=${{ steps.version.outputs.version }}
 
-      - name: Sign NuGet packages
-        env:
-          PFX_BASE64: ${{ secrets.CODE_SIGNING_PFX_BASE64 }}
-          PFX_PASSWORD: ${{ secrets.CODE_SIGNING_PFX_PASSWORD }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          if [[ -z "${PFX_BASE64:-}" || -z "${PFX_PASSWORD:-}" ]]; then
-            echo "::error::CODE_SIGNING_PFX_BASE64 / CODE_SIGNING_PFX_PASSWORD secrets are not configured."
-            exit 1
-          fi
-          pkgs=(./artifacts/*.nupkg ./artifacts/*.snupkg)
-          if [[ ${#pkgs[@]} -eq 0 ]]; then
-            echo "::error::No .nupkg or .snupkg files found in ./artifacts to sign."
-            exit 1
-          fi
-          PFX_PATH="$RUNNER_TEMP/codesign.pfx"
-          base64 -d <<<"$PFX_BASE64" > "$PFX_PATH"
-          for pkg in "${pkgs[@]}"; do
-            dotnet nuget sign "$pkg" \
-              --certificate-path "$PFX_PATH" \
-              --certificate-password "$PFX_PASSWORD" \
-              --timestamper http://timestamp.digicert.com
-          done
-          shred -u "$PFX_PATH" 2>/dev/null || rm -f "$PFX_PATH"
-
       - name: Generate SHA256SUMS
         run: |
           set -euo pipefail

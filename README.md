@@ -24,26 +24,6 @@ dotnet add package ProcessKit
 
 ## Verifying the package
 
-Every release is signed with the `AntonZhelezniakou-CodeSigning` certificate.
-The public certificate is committed at
-[certificates/AntonZhelezniakou-CodeSigning.cer](certificates/AntonZhelezniakou-CodeSigning.cer).
-
-### Verify the NuGet signature
-
-```pwsh
-# Compute the SHA-256 fingerprint of the public certificate
-$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 `
-    "certificates/AntonZhelezniakou-CodeSigning.cer"
-$fp = $cert.GetCertHashString("SHA256")
-
-# Verify the package against that fingerprint
-dotnet nuget verify ProcessKit.<version>.nupkg --certificate-fingerprint $fp
-```
-
-Expected: `Successfully verified package 'ProcessKit.<version>'.`
-
-### Verify the SHA256 checksums
-
 Each GitHub Release ships a `SHA256SUMS` file alongside the `.nupkg` / `.snupkg`.
 Download all three into the same directory, then:
 
@@ -57,6 +37,10 @@ Expected:
 ProcessKit.<version>.nupkg: OK
 ProcessKit.<version>.snupkg: OK
 ```
+
+The package on NuGet.org carries a repository signature from nuget.org, which
+attributes it to the `ProcessKit` account. You can inspect it with
+`dotnet nuget verify ProcessKit.<version>.nupkg --all`.
 
 ## Usage
 

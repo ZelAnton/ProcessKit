@@ -130,17 +130,11 @@ Write commit subjects accordingly when you want them to appear in the right buck
 
 ## Release packaging
 
-The release workflow ([.github/workflows/release.yml](.github/workflows/release.yml)) signs both `.nupkg` and `.snupkg` with the `AntonZhelezniakou-CodeSigning` certificate **before** pushing to NuGet.org, so the published artifact and the asset attached to the GitHub Release are byte-identical and both carry the signature. The public certificate is committed at [certificates/AntonZhelezniakou-CodeSigning.cer](certificates/AntonZhelezniakou-CodeSigning.cer) for consumer-side `dotnet nuget verify`.
+The release workflow ([.github/workflows/release.yml](.github/workflows/release.yml)) packs `.nupkg`/`.snupkg`, writes a `SHA256SUMS` manifest (standard `sha256sum -c` format), pushes the package to NuGet.org, and attaches all three artifacts to the GitHub Release. There is **no** author-signing step — NuGet.org adds its repository signature on the publisher account automatically, which is what attributes the package on the registry.
 
-Signing and publishing require three repo secrets:
+Publishing requires one repo secret: `NUGET_API_KEY` — nuget.org API key with push permission for the `ProcessKit` package.
 
-- `CODE_SIGNING_PFX_BASE64` — base64-encoded `.pfx` (private key + chain)
-- `CODE_SIGNING_PFX_PASSWORD` — password for the `.pfx`
-- `NUGET_API_KEY` — nuget.org API key with push permission for the `ProcessKit` package
-
-The PFX is decoded into `$RUNNER_TEMP`, used by `dotnet nuget sign --timestamper http://timestamp.digicert.com`, and shredded immediately after. If any secret is missing, the workflow fails before publishing — the push to NuGet.org and the GitHub Release creation never run, so an unsigned package cannot leak.
-
-The workflow then writes `SHA256SUMS` (one line per artifact, native `sha256sum -c` format) and attaches it to the GitHub Release alongside `.nupkg` / `.snupkg`. Verification flow for consumers is documented in [README.md](README.md).
+Self-signed author-signing was tried and removed: nuget.org validates the author signature's chain against the Microsoft Trusted Root Program and rejects self-signed packages with `NU3018`. If author-signing is ever reinstated, the certificate must come from a public CA (DigiCert, Sectigo, SSL.com, …) — not from `New-SelfSignedCertificate`.
 
 ## Security scanning
 
