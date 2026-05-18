@@ -1,0 +1,11 @@
+﻿<Solution>
+	<Folder Name="/Tests/">
+		<Project Path="tests/ProcessKit.AotSmoke/ProcessKit.AotSmoke.csproj">
+			<BuildDependency Project="src/ProcessKit/ProcessKit.csproj" />
+		</Project>
+		<Project Path="tests/ProcessKit.Tests/ProcessKit.Tests.csproj">
+			<BuildDependency Project="src/ProcessKit/ProcessKit.csproj" />
+		</Project>
+	</Folder>
+	<Project Path="src/ProcessKit/ProcessKit.csproj" />
+</Solution>

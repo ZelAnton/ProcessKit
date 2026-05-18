@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<IsPackable>false</IsPackable>
+		<PublishAot>true</PublishAot>
+		<InvariantGlobalization>true</InvariantGlobalization>
+		<RootNamespace>ProcessKit.AotSmoke</RootNamespace>
+		<AssemblySearchPaths>$(AssemblySearchPaths);$(ProcessKitProjectDir)bin\$(Configuration)\$(TargetFramework)</AssemblySearchPaths>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Reference Include="ProcessKit" />
+	</ItemGroup>
+
+</Project>
