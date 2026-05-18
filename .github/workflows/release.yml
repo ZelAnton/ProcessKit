@@ -60,6 +60,20 @@ jobs:
             exit 1
           fi
 
+      - name: Ensure previous tag exists
+        env:
+          PREV_TAG: v${{ steps.version.outputs.current }}
+        run: |
+          set -euo pipefail
+          if git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+            echo "Previous tag $PREV_TAG already exists."
+            exit 0
+          fi
+          ROOT=$(git rev-list --max-parents=0 HEAD | tail -n1)
+          echo "Previous tag $PREV_TAG does not exist; creating it at root commit $ROOT."
+          git tag "$PREV_TAG" "$ROOT"
+          git push origin "$PREV_TAG"
+
       - name: Install git-cliff
         uses: taiki-e/install-action@v2
         with:
