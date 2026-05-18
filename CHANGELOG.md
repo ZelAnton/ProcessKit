@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 -
 
+## [1.1.1] - 2026-05-18
+
+### Changed
+
+- Use latest git tag (or 0.0.0) as previous version baseline
+
+
+### Removed
+
+- Remove self-signed NuGet author signing
+
 ## [1.1.0] - 2026-05-18
 
 ### Changed
@@ -35,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rename package to `ProcessKit`, namespace to `ProcessKit`; publish to NuGet.org under MIT licence
 
-[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/ZelAnton/ProcessKit/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ZelAnton/ProcessKit/releases/tag/v1.0.0

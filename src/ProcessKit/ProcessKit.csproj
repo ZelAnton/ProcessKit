@@ -6,7 +6,7 @@
 		<AssemblyName>ProcessKit</AssemblyName>
 
 		<PackageId>ProcessKit</PackageId>
-		<Version>1.1.0</Version>
+		<Version>1.1.1</Version>
 		<Authors>Anton Zhelezniakou</Authors>
 		<Copyright>Copyright (c) 2026 Anton Zhelezniakou</Copyright>
 		<Description>Cross-platform process management toolkit for .NET. Ensures child processes are terminated when the parent exits — gracefully or via crash. Backed by Job Objects on Windows and POSIX process groups on Linux/macOS/FreeBSD. AOT-compatible.</Description>
