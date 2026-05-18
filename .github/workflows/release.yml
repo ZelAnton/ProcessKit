@@ -37,9 +37,16 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          CURRENT=$(grep -oP '(?<=<Version>)[^<]+' src/ProcessKit/ProcessKit.csproj | head -n1)
+          LATEST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          if [[ -n "$LATEST_TAG" ]]; then
+            CURRENT="${LATEST_TAG#v}"
+            echo "Latest release tag: $LATEST_TAG → current=$CURRENT"
+          else
+            CURRENT="0.0.0"
+            echo "No release tags found → current=0.0.0 (first release)"
+          fi
           if [[ ! "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Could not parse current version from csproj (got: '$CURRENT')"
+            echo "::error::Could not parse current version (got: '$CURRENT')"
             exit 1
           fi
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
@@ -226,7 +233,7 @@ jobs:
         run: dotnet nuget push "./artifacts/*.nupkg" --source "https://api.nuget.org/v3/index.json" --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
 
       - name: Bump version in csproj
-        run: sed -i "s|<Version>${{ steps.version.outputs.current }}</Version>|<Version>${{ steps.version.outputs.version }}</Version>|" src/ProcessKit/ProcessKit.csproj
+        run: sed -i -E "s|<Version>[^<]+</Version>|<Version>${{ steps.version.outputs.version }}</Version>|" src/ProcessKit/ProcessKit.csproj
 
       - name: Promote Unreleased section in CHANGELOG.md
         env:
