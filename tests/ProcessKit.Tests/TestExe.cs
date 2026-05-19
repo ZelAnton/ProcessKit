@@ -52,7 +52,9 @@ static class TestExe
 				CreateNoWindow = true,
 				UseShellExecute = false,
 			}
-			: Shell($"printf '%b' '{string.Concat(bytes.Select(b => $"\\x{b:x2}"))}'");
+			// Octal escapes (`\NNN`) are POSIX printf — supported by dash/ash on Ubuntu/Alpine.
+			// `\xNN` is a bash/GNU extension and outputs the literal text on dash, breaking the test.
+			: Shell($"printf '{string.Concat(bytes.Select(b => $"\\{Convert.ToString(b, 8).PadLeft(3, '0')}"))}'");
 	}
 
 	static ProcessStartInfo Shell(string command) => _sIsWindows

@@ -214,11 +214,10 @@ public class ProcessRunnerTests
 	public void GetOutputSync_ReturnsStdOut()
 	{
 		var runner = new ProcessRunner();
-		var output = runner.GetOutput("cmd", ["/c", "echo sync-test"]);
-		if (!OperatingSystem.IsWindows())
-		{
-			output = runner.GetOutput("sh", ["-c", "echo sync-test"]);
-		}
+		// Pick the shell up front — running cmd on Linux throws Win32Exception before any fallback.
+		var output = OperatingSystem.IsWindows()
+			? runner.GetOutput("cmd", ["/c", "echo sync-test"])
+			: runner.GetOutput("sh", ["-c", "echo sync-test"]);
 		Assert.That(output.Trim(), Is.EqualTo("sync-test"));
 	}
 
