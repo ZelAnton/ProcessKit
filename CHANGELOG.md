@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extension methods on `IProcessRunner`: `Start(exe, args)` convenience overload, `GetOutputAsync`, `GetFirstLineOutputAsync`, `GetFullOutputAsync`, `GetBytesOutputAsync`, `GetExitCodeAsync`, sync `GetOutput`/`GetFirstLineOutput`, and `Task<ProcessResult<T>>.EnsureSuccessAsync()`.
 
 ### Changed
--
+- README slimmed for the NuGet package page: contributor-only "Running tests on Linux from Windows" guide moved to `docs/linux-testing.md`.
+- README intro and NuGet package description rewritten to reflect both surfaces (`ProcessGroup` lifetime layer + `ProcessRunner` async-first command runner).
 
 ### Fixed
 -

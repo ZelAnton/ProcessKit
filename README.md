@@ -1,13 +1,22 @@
 ﻿# ProcessKit
 
-Cross-platform child process lifetime management and execution for .NET.
+Cross-platform child process management for .NET, with two complementary surfaces:
 
-ProcessKit ensures that child processes are terminated when the parent exits
-— whether gracefully or via crash — and offers an ergonomic runner for
-executing external commands and capturing their output.
+- **`ProcessGroup`** — every child started in a group is killed atomically when the
+  group is disposed, even if the parent process crashes. Windows: kernel
+  [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+  Unix (Linux / macOS / FreeBSD): POSIX process groups.
+- **`ProcessRunner` / `IProcessRunner`** — async-first runner for external commands.
+  Stream stdout/stderr line-by-line via `IAsyncEnumerable<string>`, capture bulk
+  output (`ProcessResult<T>` with stderr and exit code), or just get the exit code.
+  Pipe stdin from a `string` / bytes / `Stream` / `IAsyncEnumerable<string>` / file.
+  Timeouts, cancellation, per-line push handlers, encoding overrides, structural
+  `with`-options, fluent `EnsureSuccess` / `EnsureSuccessAsync`, runtime diagnostics
+  (PID, duration, CPU time, peak memory, line counters, timeout flag).
 
-On Windows this is backed by kernel Job Objects;
-on Unix systems (Linux, macOS, FreeBSD) it uses POSIX process groups.
+Every spawned process — whether started via `ProcessGroup.Start` or
+`ProcessRunner` — inherits the kill-on-dispose guarantee. AOT-compatible. Zero
+external runtime dependencies.
 
 ## Requirements
 
@@ -151,35 +160,6 @@ Console.WriteLine(
 ```csharp
 var fast = new ProcessRunOptions { Timeout = TimeSpan.FromSeconds(5) };
 var slow = fast with { Timeout = TimeSpan.FromMinutes(5) };
-```
-
-## Running tests on Linux from Windows
-
-The Unix code path (`UnixProcessGroup`, `Libc`) is exercised in CI on
-`ubuntu-latest`, but you can also run the suite locally against a Linux
-container — useful when changing native interop or shutdown semantics.
-
-Requirements:
-
-- [Rancher Desktop](https://rancherdesktop.io/) (or Docker Desktop) with the
-  `dockerd` / moby engine enabled so `docker` is on `PATH`
-- PowerShell 7+
-
-```pwsh
-pwsh ./scripts/test-linux.ps1
-```
-
-The script mounts the repo into `mcr.microsoft.com/dotnet/sdk:10.0` and runs
-`dotnet build` + `dotnet test`. The host's `bin/` and `obj/` folders are
-shadowed inside the container with anonymous volumes, so the Linux build
-neither sees the Windows IDE artifacts nor writes back into the host tree.
-A named volume (`processkit-nuget`) caches NuGet packages between runs.
-
-Useful switches:
-
-```pwsh
-pwsh ./scripts/test-linux.ps1 -Filter "FullyQualifiedName~TerminateAll"
-pwsh ./scripts/test-linux.ps1 -Configuration Debug -Rebuild
 ```
 
 ## Changelog

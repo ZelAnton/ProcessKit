@@ -9,8 +9,8 @@
 		<Version>1.1.1</Version>
 		<Authors>Anton Zhelezniakou</Authors>
 		<Copyright>Copyright (c) 2026 Anton Zhelezniakou</Copyright>
-		<Description>Cross-platform process management toolkit for .NET. Ensures child processes are terminated when the parent exits — gracefully or via crash. Backed by Job Objects on Windows and POSIX process groups on Linux/macOS/FreeBSD. AOT-compatible.</Description>
-		<PackageTags>process;job-object;process-group;cross-platform;lifetime;child-process</PackageTags>
+		<Description>Cross-platform child process management for .NET. ProcessGroup guarantees children are killed when the parent exits — kernel Job Objects on Windows, POSIX process groups on Linux/macOS/FreeBSD. ProcessRunner adds an async-first command runner with line-by-line streaming, bulk capture, stdin piping, timeouts, cancellation, and runtime diagnostics. AOT-compatible.</Description>
+		<PackageTags>process;process-runner;job-object;process-group;cross-platform;lifetime;child-process;async;streaming</PackageTags>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<PackageReleaseNotes Condition="Exists('$(RepoRoot)release-notes.md')">$([System.IO.File]::ReadAllText('$(RepoRoot)release-notes.md'))</PackageReleaseNotes>
