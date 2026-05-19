@@ -274,12 +274,50 @@
 	- non-obvious process lifetime behavior
 - Do not write comments describing what the code already says.
 
-## Git Rules
+## Version control (jujutsu)
 
-- Agents must not create commits.
-- Agents must not push changes.
-- Do not revert user changes unless the user explicitly agrees to this.
-- Do not rewrite unrelated files.
+This repository uses [jujutsu (`jj`)](https://jj-vcs.github.io/jj/) for version control. The repo is colocated with git, but `jj` is the primary tool — use `jj` commands for everything in this workflow, not raw `git`.
+
+### Describing the current change
+
+- When you start a new piece of work, set the change description right away:
+	```
+	jj describe -m "Concise summary of what this change does"
+	```
+- For larger work, fold subsequent small edits into the current change without asking the user — keep extending the same change rather than starting a new one for each follow-up.
+- If the scope of the current change shifts mid-work, refresh the description with another `jj describe -m "..."`. The description must always reflect what's actually being done.
+
+### Starting unrelated work
+
+If the user asks for something unrelated to the in-progress change:
+- **Current change is complete** → propose a new change descended from it:
+	```
+	jj new -m "Description of the new task"
+	```
+- **Current change still needs more work** → propose a parallel change off the same parent so the user can come back to the current one later:
+	```
+	jj new @- -m "Description of the unrelated task"
+	```
+- Do not silently mix the two — every change must stay coherent.
+
+### Pushing to remote
+
+The user signals "synchronise with remote" with a short trigger word (typically `pull` or `push`). On that signal, run the full sync:
+1. `jj git fetch` — pull down any remote-side movement (e.g. CI release commits or other contributors' pushes) **before** doing anything else.
+2. If `main@origin` has moved past the local change, rebase: `jj rebase -r @- -d main@origin`.
+3. Move the `main` bookmark to the completed change: `jj bookmark set main -r <rev>`.
+4. Push: `jj git push --bookmark main`.
+
+Never push without an explicit signal from the user.
+
+### Bookmarks
+
+Work happens on `main`. **Do not create new bookmarks unless the user explicitly asks for one** (e.g. for a feature-branch / PR workflow). The default flow is push-to-main.
+
+### Safety
+
+- Do not revert or amend changes the user authored without explicit agreement.
+- Do not rewrite unrelated files when making a focused change.
 
 ## Command Conventions
 

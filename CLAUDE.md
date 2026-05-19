@@ -265,3 +265,23 @@ Self-signed author-signing was tried and removed: nuget.org validates the author
 ## Security scanning
 
 [.github/workflows/codeql.yml](.github/workflows/codeql.yml) runs GitHub CodeQL against the C# codebase on PR, push to `main`, and weekly. The query suite is `security-and-quality` (broader than the default `security-extended`) and `build-mode: manual` so the workflow drives an explicit `dotnet build ProcessKit.slnx` — autobuild can pick the wrong SDK or miss `.slnx`. Findings land under repo **Security → Code scanning**. Treat new alerts like build warnings; if a finding is a confirmed false positive, dismiss it in the GitHub UI with a written justification rather than tweaking the workflow to hide it.
+
+## Version control workflow
+
+The repo uses [jujutsu (`jj`)](https://jj-vcs.github.io/jj/) (colocated with git). Use `jj` commands; the canonical workflow:
+
+- **Describe early.** When starting a new piece of work, immediately set the change description:
+	```
+	jj describe -m "Concise summary"
+	```
+	Small follow-ups for the same task get folded into the current change without asking — keep extending the same `jj` change, don't spawn one per edit. If the scope shifts, run `jj describe -m "..."` again so the description matches reality.
+- **Unrelated work mid-task.** If the user requests something orthogonal, ask before splitting:
+	- Current change finished? → `jj new -m "..."` (descendant).
+	- Current change still in progress? → `jj new @- -m "..."` (parallel sibling, so you can return to the original later).
+- **Sync on the user's trigger.** When the user says `pull` (or `push`/`sync`), run the full handshake:
+	1. `jj git fetch` first — picks up any remote movement (CI release commits, etc.).
+	2. Rebase if `main@origin` advanced: `jj rebase -r @- -d main@origin`.
+	3. `jj bookmark set main -r <rev>` then `jj git push --bookmark main`.
+
+	Never push without an explicit signal from the user.
+- **No new bookmarks** unless the user explicitly asks. Work lives on `main`; that is the publish target.
