@@ -284,4 +284,9 @@ The repo uses [jujutsu (`jj`)](https://jj-vcs.github.io/jj/) (colocated with git
 	3. `jj bookmark set main -r <rev>` then `jj git push --bookmark main`.
 
 	Never push without an explicit signal from the user.
+- **Undoing dropped work.** When the user decides to abandon something already done, reach for `jj`'s safety net rather than hand-cleanup:
+	- `jj undo` (alias of `jj op undo`) reverses the last operation — describe, edit, squash, rebase, abandon, push, all of it. Repeatable.
+	- `jj abandon <rev>` drops a specific change entirely; descendants auto-rebase.
+	- `jj restore` discards working-copy edits back to the parent's tree.
+	- `jj op log` is the full reflog if you need to go further back via `jj op restore <op-id>`.
 - **No new bookmarks** unless the user explicitly asks. Work lives on `main`; that is the publish target.

@@ -310,6 +310,17 @@ The user signals "synchronise with remote" with a short trigger word (typically 
 
 Never push without an explicit signal from the user.
 
+### Undoing work
+
+When the user decides to abandon work in progress, prefer `jj`'s native undo facilities — they are safer than hand-rolled cleanup:
+
+- **`jj undo`** (alias of `jj op undo`) — reverses the last operation (describe / edit / squash / rebase / abandon / push / etc.). Use this when the latest step was the wrong call. It is repeatable: `jj undo` again undoes the previous one.
+- **`jj abandon <rev>`** — drops a specific change entirely. Descendants automatically rebase onto its parent. Useful for "this whole change is the wrong direction; throw it away".
+- **`jj restore`** — discards working-copy modifications and resets `@` to its parent's tree. Useful for "I haven't committed yet, just wipe what I did".
+- **`jj op log`** is the reflog equivalent — every operation is reachable. If `jj undo` overshoots, `jj op restore <op-id>` jumps to any prior point.
+
+Never hide a deliberate undo: if the user asks to "undo the last commit/change", run `jj undo` (or `jj abandon`) and tell them what was reverted.
+
 ### Bookmarks
 
 Work happens on `main`. **Do not create new bookmarks unless the user explicitly asks for one** (e.g. for a feature-branch / PR workflow). The default flow is push-to-main.
