@@ -196,7 +196,11 @@ sealed class UnixProcessGroup : IProcessGroupImpl
 				if (!process.HasExited)
 					kill(process.Id, SIGTERM);
 			}
-			catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException) { }
+			catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+			{
+				// Process has already exited or was disposed by another thread mid-iteration —
+				// expected race during shutdown; nothing to signal.
+			}
 		}
 	}
 }

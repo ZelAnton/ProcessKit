@@ -8,7 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
--
+- `IProcessRunner` interface and `ProcessRunner` default implementation for executing external commands with full lifetime management via `ProcessGroup`.
+- `ProcessRunner.Default` static singleton for casual use without DI.
+- `IRunningProcess` handle exposing `StdOut`/`StdErr` as `IAsyncEnumerable<string>`, line counters, `Pid`, `StartTime`, `Duration`, `CpuTime`, `PeakMemoryBytes`, `WasTimedOut`, `Exited` cancellation token, and `Completion` task.
+- `ProcessResult<T>` record carrying `StdOut`, `StdErr`, `ExitCode`, `WasTimedOut`, `IsSuccess`, and fluent `EnsureSuccess()`.
+- `ProcessExitException` raised by `EnsureSuccess()` on non-zero exit, carrying `ExitCode` and the captured `StdErr`.
+- `ProcessRunOptions` (record) for stdin, stderr/stdout handlers, shared `ProcessGroup`, timeout, and encoding overrides.
+- `StandardInput` closed union with factories `Empty`, `FromString`, `FromBytes`, `FromStream`, `FromLines` (async), `FromEnumerable` (sync), and `FromFile` (eagerly validated path).
+- Extension methods on `IProcessRunner`: `Start(exe, args)` convenience overload, `GetOutputAsync`, `GetFirstLineOutputAsync`, `GetFullOutputAsync`, `GetBytesOutputAsync`, `GetExitCodeAsync`, sync `GetOutput`/`GetFirstLineOutput`, and `Task<ProcessResult<T>>.EnsureSuccessAsync()`.
 
 ### Changed
 -

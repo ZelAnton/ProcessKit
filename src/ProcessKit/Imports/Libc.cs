@@ -1,5 +1,7 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+
+// ReSharper disable InconsistentNaming
 
 namespace ProcessKit;
 

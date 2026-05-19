@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 
 namespace ProcessKit.Tests;
 
@@ -131,7 +131,7 @@ public class ProcessGroupTests
 		var group = new ProcessGroup();
 		group.Dispose();
 
-		Assert.Throws<ObjectDisposedException>(() => group.TerminateAll());
+		Assert.Throws<ObjectDisposedException>(group.TerminateAll);
 	}
 
 	[Test]
@@ -254,7 +254,7 @@ public class ProcessGroupTests
 
 		// Contract: either Add succeeds silently (Unix swallows ESRCH/EPERM/EACCES,
 		// Windows AssignProcessToJobObject fails because the process is gone) or it
-		// throws. Either way, Dispose afterwards must not throw.
+		// throws. Either way, Dispose afterward must not throw.
 		try { group.Add(external); }
 		catch (System.ComponentModel.Win32Exception) { }
 		catch (InvalidOperationException) { }
@@ -299,7 +299,7 @@ public class ProcessGroupTests
 			.Select(_ => (Task)Task.Run(() => group.Start(LongRunningProcess())))
 			.ToArray();
 		var stats = Enumerable.Range(0, 50)
-			.Select(_ => (Task)Task.Run(() => group.GetStats()))
+			.Select(_ => (Task)Task.Run(group.GetStats))
 			.ToArray();
 
 		await Task.WhenAll(starts.Concat(stats));

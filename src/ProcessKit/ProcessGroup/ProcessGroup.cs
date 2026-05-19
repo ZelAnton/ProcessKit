@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace ProcessKit;
@@ -23,6 +23,7 @@ public sealed class ProcessGroup : IDisposable, IAsyncDisposable
 	{
 		ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 		ArgumentNullException.ThrowIfNull(startInfo);
+
 		cancellationToken.ThrowIfCancellationRequested();
 
 		var process = _impl.StartAndAdd(startInfo);
@@ -37,6 +38,7 @@ public sealed class ProcessGroup : IDisposable, IAsyncDisposable
 	{
 		ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 		ArgumentNullException.ThrowIfNull(process);
+
 		_impl.Add(process);
 	}
 

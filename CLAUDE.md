@@ -24,7 +24,9 @@ dotnet publish tests/ProcessKit.AotSmoke/ProcessKit.AotSmoke.csproj -c Release -
 
 ## Architecture
 
-The library namespace is `ProcessKit`; the public type is `ProcessGroup`. No ambiguity — `using ProcessKit; new ProcessGroup()` resolves cleanly. `AssemblyName` and `PackageId` are `ProcessKit` — those are the package identity; the namespace is the API surface.
+The library namespace is `ProcessKit`; the two public surfaces are `ProcessGroup` (process lifetime) and `ProcessRunner` / `IProcessRunner` (run-and-capture-output). `AssemblyName` and `PackageId` are `ProcessKit` — those are the package identity; the namespace is the API surface.
+
+### `ProcessGroup` (lifetime layer)
 
 `ProcessGroup` is a thin cross-platform façade over two platform-specific implementations behind `IProcessGroupImpl`:
 
@@ -67,6 +69,128 @@ public readonly record struct ProcessGroupStats(
 - `IsAotCompatible = true` — keep all P/Invoke via `[LibraryImport]`; no reflection-based interop. The CI `aot-publish` job (see [.github/workflows/ci.yml](.github/workflows/ci.yml)) runs `dotnet publish -p:PublishAot=true` on `tests/ProcessKit.AotSmoke` and executes the resulting native binary, so any IL2xxx/IL3xxx warning introduced by a code change fails CI.
 - `TreatWarningsAsErrors = true` — the build is warning-clean; keep it that way.
 
+### Exception handling style
+
+- **No one-line `try` / `catch` / `finally`.** Each keyword owns a braced block on its own lines. `try { ... } catch { }` collapsed onto a single line is a style violation.
+- **Empty `catch` blocks must carry a comment explaining the rationale** — both what is being swallowed and why ignoring is correct here. `// ignored` alone is not enough; the comment should answer "what exception did we expect, and why is doing nothing the right response?".
+
+Example:
+```csharp
+try
+{
+	_exitedCts.Cancel();
+}
+catch (ObjectDisposedException)
+{
+	// already disposed - the runner is being torn down concurrently; pumps are winding down anyway.
+}
+```
+See [AGENTS.md](AGENTS.md#exception-handling-style) for the canonical rule.
+
+### `ProcessRunner` (execution layer)
+
+`ProcessRunner : IProcessRunner` is a thin runner that turns a `ProcessStartInfo` into an `IRunningProcess` handle. It wraps `ProcessGroup` internally so every spawned process inherits the kill-on-dispose guarantee.
+
+The interface itself is intentionally minimal — **one method**:
+
+```csharp
+public interface IProcessRunner
+{
+    IRunningProcess Start(
+        ProcessStartInfo startInfo,
+        ProcessRunOptions? options = null,
+        CancellationToken cancellationToken = default);
+}
+```
+
+Everything else (`GetOutputAsync`, `GetFirstLineOutputAsync`, `GetFullOutputAsync`, `GetBytesOutputAsync`, `GetExitCodeAsync`, `Start(exe, args)` convenience overload, sync wrappers, `Task<ProcessResult<T>>.EnsureSuccessAsync()`) lives in [ProcessRunnerExtensions](src/ProcessKit/ProcessRunnerExtensions.cs) as extension methods on `IProcessRunner`. This split keeps fakes/mocks trivial (one method to implement) and guarantees all helpers behave consistently across implementations.
+
+`ProcessRunner.Default` is a static singleton for callers that don't use DI: `await ProcessRunner.Default.GetFullOutputAsync(...)`. The runner is stateless so the singleton is thread-safe.
+
+#### The handle: `IRunningProcess`
+
+```csharp
+public interface IRunningProcess : IAsyncDisposable
+{
+    IAsyncEnumerable<string> StdOut { get; }         // line-streamed, decoded as UTF-8
+    IAsyncEnumerable<string> StdErr { get; }         // ditto
+    int StdOutLineCount { get; }                     // atomic, live + stable after exit
+    int StdErrLineCount { get; }
+    int Pid { get; }
+    DateTime StartTime { get; }
+    TimeSpan? Duration { get; }                      // null until the process exits, then stable (Stopwatch-based, monotonic)
+    TimeSpan? CpuTime { get; }                       // live-sampled; cached snapshot after exit (survives Process.Dispose)
+    long? PeakMemoryBytes { get; }                   // same live-then-cached pattern; may be null when OS no longer exposes the counter
+    bool WasTimedOut { get; }                        // true iff Options.Timeout fired (NOT external cancellation)
+    CancellationToken Exited { get; }                // fires when the process exits
+    Task<int> Completion { get; }                    // resolves with the raw exit code; await with .WaitAsync(ct) if needed
+}
+```
+
+Both `StdOut` and `StdErr` are backed by unbounded `Channel<string>`s pumped by background tasks (`PumpLinesAsync` in [PipePumpHelpers.cs](src/ProcessKit/PipePumpHelpers.cs)). Pumps run unconditionally — even if the caller never enumerates the streams — so the process never blocks on a full OS pipe buffer. That means unconsumed `StdErr` will buffer indefinitely on chatty processes; the XML-doc on `StdErr` documents this OOM risk.
+
+`Completion` may resolve before the last few lines reach `StdOut` — `Process.Exited` fires when the process exits, not when the pipes are fully drained. `await p.Completion` does not guarantee stdout has been fully consumed; if both matter, await both.
+
+`WasTimedOut` is backed by a **separate** `CancellationTokenSource` whose token registration cancels `_killCts`. Do not collapse this into `_killCts.CancelAfter(timeout)` — that would erase the "kind-of-cancellation" signal that distinguishes timeout-kill from caller-cancellation.
+
+`CpuTime` and `PeakMemoryBytes` are live-sampled (read directly from `Process.TotalProcessorTime` / `Process.PeakWorkingSet64`) until `Process.Exited` fires; then the values are cached in `long` sentinels (`-1` = not cached) via `Interlocked.Exchange` so they remain readable after `_process.Dispose()`. Both may return `null` when the underlying counter is unavailable — typical on Unix once `/proc/$PID/` is gone.
+
+#### `ProcessRunOptions`
+
+```csharp
+public sealed record ProcessRunOptions
+{
+    public StandardInput? StandardInput { get; init; }              // null/Empty → stdin closed at start
+    public Action<string>? StandardOutputHandler { get; init; }     // push-style stdout tee
+    public Action<string>? StandardErrorHandler { get; init; }      // push-style stderr tee
+    public ProcessGroup? ProcessGroup { get; init; }                // null → private group + auto-dispose; non-null → shared, caller owns
+    public TimeSpan? Timeout { get; init; }                         // auto-kill after this duration (drives WasTimedOut)
+    public Encoding? StdOutEncoding { get; init; }                  // overrides PSI; UTF-8 fallback
+    public Encoding? StdErrEncoding { get; init; }
+}
+```
+
+Declared as a `record class` so callers can derive variants via `with`-expression: `var slow = fast with { Timeout = TimeSpan.FromMinutes(5) };`. Equality is structural (handlers compared via `Delegate.Equals`, `ProcessGroup` by reference).
+
+Push handlers run in parallel to the corresponding `IAsyncEnumerable`. Both can be used at the same time — each line goes to both consumers. Handlers run synchronously inside the pump task; exceptions thrown by user code are swallowed so the pump cannot be derailed.
+
+#### `StandardInput`
+
+Closed union of factory methods — `private protected` constructor blocks external derivation, internal sealed subtypes drive the pattern-match in `WriteStandardInputAsync`:
+
+- `StandardInput.Empty`
+- `StandardInput.FromString(string, Encoding? = UTF-8)`
+- `StandardInput.FromBytes(ReadOnlyMemory<byte>)`
+- `StandardInput.FromStream(Stream, bool leaveOpen = false)`
+- `StandardInput.FromLines(IAsyncEnumerable<string>, Encoding? = UTF-8)` — newline-delimited streamed input
+- `StandardInput.FromEnumerable(IEnumerable<string>, Encoding? = UTF-8)` — synchronous counterpart
+- `StandardInput.FromFile(string path)` — file contents piped into stdin. Existence is validated **eagerly** at factory time (`FileNotFoundException`) — otherwise a missing path would be silently swallowed by the stdin pump's `IOException` handler.
+
+#### Defensive PSI clone
+
+`Start` does **not** mutate the caller's `ProcessStartInfo`. `PrepareStartInfo` in [PipePumpHelpers.cs](src/ProcessKit/PipePumpHelpers.cs) builds a copy with the runner's required flags (`RedirectStandardOutput=true`, `RedirectStandardError=true`, `UseShellExecute=false`, and `RedirectStandardInput=true` only when `options.StandardInput` is non-`Empty`). Commonly-used PSI fields are copied (FileName, ArgumentList, WorkingDirectory, Environment, CreateNoWindow, WindowStyle, Verb, UserName; Windows-only Domain/PasswordInClearText/LoadUserProfile inside an `OperatingSystem.IsWindows()` guard for CA1416). Exotic settings outside this list may not propagate — document if you extend the clone.
+
+#### `ProcessExitException` and `EnsureSuccess`
+
+`ProcessResult<T>` exposes `bool IsSuccess => ExitCode == 0`, `bool WasTimedOut` (set when `Options.Timeout` fired), and a fluent `EnsureSuccess()` that throws `ProcessExitException` (carrying `ExitCode` and the captured `StdErr`) on non-zero exit. The exception message truncates stderr to 4 KB so unintentional log-poisoning by a 100 MB error dump is impossible.
+
+For async chains: `Task<ProcessResult<T>>.EnsureSuccessAsync()` extension awaits and calls `EnsureSuccess` in one go — useful for `(await runner.GetFullOutputAsync(...).EnsureSuccessAsync()).StdOut` style.
+
+The runner itself never throws on non-zero exit — it always returns the result; only `EnsureSuccess`/`EnsureSuccessAsync` opts into throwing. Streaming methods don't surface the exit code at all (use the bulk variants or the handle's `Completion` if needed).
+
+#### `GetBytesOutputAsync` — the one special case
+
+`GetBytesOutputAsync` is the only extension that **does not** go through `IRunningProcess` — the handle is line-oriented (channels of `string`), and forcing binary stdout through string decoding would be lossy. Instead it talks to `ProcessGroup` directly and copies `process.StandardOutput.BaseStream` into a `MemoryStream`. Stderr is still captured via the standard pump helpers. Some boilerplate is duplicated from `RunningProcess` to avoid leaking raw streams onto the public `IRunningProcess`.
+
+#### Disposal sequencing
+
+`RunningProcess.DisposeAsync` is idempotent (Interlocked guard). On dispose:
+1. Cancel `_killCts` — the linked-token registration inside `ProcessGroup.Start` kills the process.
+2. Wait up to **5 seconds** for stdout/stderr/stdin pumps to wind down (bounded — a stuck OS pipe must not hang dispose forever).
+3. Complete both channels (in case a pump never observed EOF).
+4. Reap the process via `WaitForExitAsync(CancellationToken.None)` — must not honour caller cancellation here or the process zombie leaks.
+5. If we own the `ProcessGroup` (private case), dispose it. Shared groups are left alone — the caller owns them.
+
 ### Test project setup
 
 Both `tests/ProcessKit.Tests` and `tests/ProcessKit.AotSmoke` reference the library via direct `<Reference Include="ProcessKit" />` + `AssemblySearchPaths` (not `<ProjectReference>`). Build ordering comes from `BuildDependency` entries in `ProcessKit.slnx`. Run tests after a `dotnet build` or let the test runner build implicitly.
@@ -90,7 +214,7 @@ Use these properties wherever a `.csproj`, `.props`, or `.targets` file must ref
 
 `CHANGELOG.md` is the single source of truth for release notes. The release workflow reads the `## [Unreleased]` section automatically — it populates the GitHub Release body and the NuGet `<PackageReleaseNotes>` field.
 
-**When to add an entry manually:** any user-visible change where you want a curated, consumer-friendly wording — new API, changed behaviour, bug fix, deprecation, removal.
+**Rule: every user-visible change ships with a `CHANGELOG.md` entry in the same change set.** This covers new or modified public API, behavioural changes, bug fixes, deprecations, and removals. The only exemption is pure internal refactors that do not alter observable behaviour. The changelog update is part of the change, not a follow-up task — never defer it.
 
 **How to add an entry:**
 
@@ -99,7 +223,9 @@ Use these properties wherever a `.csproj`, `.props`, or `.targets` file must ref
    - `### Added` — new features or API members
    - `### Changed` — modified behaviour or API
    - `### Fixed` — bug fixes
-3. Replace the placeholder `-` with a real bullet (or append after existing bullets). Keep it one line, written for a consumer of the library — not for the implementer.
+   - `### Removed` — removed features or API members
+   - `### Deprecated` — features still present but marked for removal
+3. Replace the placeholder `-` with a real bullet (or append after existing bullets). Keep it one line, written for a consumer of the library — not for the implementer. One bullet per distinct user-visible effect — bundle nothing.
 
 Example:
 

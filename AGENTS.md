@@ -2,7 +2,7 @@
 
 ## Project
 
-- This repository contains `ProcessKit`, a reusable .NET library for cross-platform child process lifetime management.
+- This repository contains `ProcessKit`, a reusable .NET library for cross-platform child process lifetime management and external command execution.
 - The public API lives in `src/ProcessKit`.
 - Tests live in `tests/ProcessKit.Tests`.
 - The AOT validation smoke executable lives in `tests/ProcessKit.AotSmoke` — a minimal console app that exercises the public API and is `dotnet publish -p:PublishAot=true`-ed in CI to catch AOT-incompatible changes (including transitive ones).
@@ -40,14 +40,34 @@
 
 - Keep all functionality available as reusable library APIs.
 - Keep platform-specific implementations internal to the library.
-- The library namespace is `ProcessKit`; the public class is `ProcessGroup`. No ambiguity — `using ProcessKit; new ProcessGroup()` resolves cleanly.
-- Preserve the split between:
-	- `ProcessGroup` public API
-	- `IProcessGroupImpl` internal abstraction
-	- `WindowsJobObject` Windows implementation
-	- `UnixProcessGroup` Unix-like implementation
+- The library namespace is `ProcessKit`. Two public surfaces:
+	- **Lifetime layer:** `ProcessGroup` (cross-platform façade over `IProcessGroupImpl`).
+	- **Execution layer:** `ProcessRunner` / `IProcessRunner` + `IRunningProcess` (built on top of `ProcessGroup`).
+- Preserve the splits:
+	- Lifetime: `ProcessGroup` (public) → `IProcessGroupImpl` (internal) → `WindowsJobObject` / `UnixProcessGroup`.
+	- Execution: `IProcessRunner` (one-method interface) → `ProcessRunner` (implementation) → `RunningProcess` (internal handle) → `ProcessRunnerExtensions` (all helpers as extension methods).
 - Do not expose platform-specific implementation types publicly unless explicitly requested.
 - Do not add dependency injection for this small library unless there is a concrete need.
+
+## ProcessRunner conventions
+
+- `IProcessRunner` has **one** method — `Start(ProcessStartInfo, ProcessRunOptions?, CancellationToken)`. Everything else (`GetOutputAsync`, `GetFullOutputAsync`, `GetFirstLineOutputAsync`, `GetBytesOutputAsync`, `GetExitCodeAsync`, convenience `Start(exe, args)`, sync wrappers) must remain extension methods in `ProcessRunnerExtensions`. New helpers go there, not on the interface — this keeps fakes/mocks trivial and helpers consistent.
+- The runner never throws on non-zero exit. Bulk methods return `ProcessResult<T>` carrying `StdOut`, `StdErr`, `ExitCode`. Use `ProcessResult.IsSuccess` and `ProcessResult.EnsureSuccess()` for opt-in throwing.
+- `ProcessExitException` is the **only** exception used to surface non-zero exits. Do not introduce additional exit-related exception types.
+- The runner takes a **defensive copy** of the supplied `ProcessStartInfo`. Never mutate the caller's PSI. The clone helper lives in `PipePumpHelpers.PrepareStartInfo`.
+- The runner **forces** `RedirectStandardOutput=true`, `RedirectStandardError=true`, `UseShellExecute=false` on the clone. `RedirectStandardInput` is forced to `true` iff a non-`Empty` `StandardInput` is supplied. Caller-provided redirection flags on those streams are ignored.
+- All text is **UTF-8 by default**. Encoding overrides resolve as `ProcessRunOptions.Std{Out,Err}Encoding` > `ProcessStartInfo.Standard{Output,Error}Encoding` > UTF-8.
+- `IRunningProcess` is **line-oriented** by design (`IAsyncEnumerable<string>` for both stdout and stderr). Raw byte access is intentionally absent from the interface; `GetBytesOutputAsync` bypasses the handle and talks to `Process.StandardOutput.BaseStream` directly. Do not add a raw `Stream` property to `IRunningProcess` without explicit approval.
+- Stdout/stderr pumps run unconditionally on background tasks so the child never blocks on a full OS pipe buffer. Unconsumed `StdErr` will buffer indefinitely on chatty processes (unbounded `Channel<string>`) — this OOM risk is documented in the XML-doc on `IRunningProcess.StdErr`. Do not silently drop or cap stderr without an explicit option.
+- `ProcessGroup` integration has two modes:
+	- **Private** (`ProcessRunOptions.ProcessGroup == null`): runner creates its own `ProcessGroup` and disposes it when the handle is disposed.
+	- **Shared** (`ProcessRunOptions.ProcessGroup != null`): runner adds the process to the caller-provided group and does **not** dispose it. Caller owns the group lifetime.
+	- "No group at all" is intentionally unsupported — call `Process.Start` directly if you do not want lifetime management.
+- `IRunningProcess.DisposeAsync` is idempotent and must remain idempotent (Interlocked guard). Final teardown uses `WaitForExitAsync(CancellationToken.None)` — the caller's cancellation token has already done its work (killed the process); honouring it during reap would leak a zombie.
+- The `StandardInput` union (`Empty` / `FromString` / `FromBytes` / `FromStream` / `FromLines` / `FromEnumerable` / `FromFile`) is a **closed hierarchy** (`private protected` constructor). Do not add new subtypes outside the abstract class. `FromFile` eagerly validates path existence at factory time — without this, a missing path is silently swallowed by the stdin pump's `catch (IOException)`.
+- `ProcessRunOptions` is a `record class` (use `with`-expressions to derive variations). Adding new options is a non-breaking change as long as defaults preserve current behaviour.
+- `IRunningProcess` exposes `CpuTime`, `PeakMemoryBytes`, `WasTimedOut`, `Duration`, `Pid`, `StartTime` and `Completion`/`Exited`. `CpuTime` and `PeakMemoryBytes` are live-sampled before exit and cached after exit (so they survive `_process.Dispose()`). Both may return `null` when the OS no longer exposes the counter (typical on Unix post-exit) — do not tighten the contract to "never null".
+- `WasTimedOut` reflects whether `ProcessRunOptions.Timeout` specifically fired. External-token cancellation must keep `WasTimedOut == false`. The implementation tracks this via a **separate** `CancellationTokenSource` whose token registration cascades into `_killCts.Cancel()` — do not merge the timeout into `_killCts.CancelAfter()`, that loses the signal.
 
 ## Thread Safety
 
@@ -60,6 +80,7 @@
 ## Process Execution
 
 - All processes started through `ProcessGroup.Start` must be attached to the active process group implementation immediately after start.
+- All processes started through `IProcessRunner.Start` go through `ProcessGroup.Start` internally — they automatically inherit the same guarantee.
 - On Windows, every spawned process managed by this library must be assigned to a Windows Job Object.
 - On Linux, macOS, and FreeBSD, every spawned process managed by this library must be assigned to the POSIX process group used by the library.
 - `Dispose` must terminate managed child processes.
@@ -155,6 +176,39 @@
 - Minimize public API surface area.
 - Public API changes must be intentional and documented.
 
+### Exception handling style
+
+- **No one-line `try`/`catch`/`finally`.** Every `try`, `catch`, and `finally` keyword must own a brace block on its own lines. Forbidden:
+	```csharp
+	try { foo(); } catch { }
+	try { foo(); } catch (IOException) { /* swallow */ }
+	finally { stream.Dispose(); }
+	```
+	Required:
+	```csharp
+	try
+	{
+		foo();
+	}
+	catch (IOException)
+	{
+		// swallowed - pipe closed by the OS during teardown; nothing actionable.
+	}
+	```
+- **Empty `catch` blocks must contain a short comment explaining why the exception is swallowed.** "What is being caught" plus "why ignoring is correct here". A bare `catch { }` (or `catch (X) { }`) without a justification comment is not acceptable. Examples:
+	```csharp
+	catch (ObjectDisposedException)
+	{
+		// runner already torn down — pumps observe disposal as EOF, nothing to recover.
+	}
+
+	catch
+	{
+		// best-effort cleanup in a catch block; rethrowing here would mask the original exception.
+	}
+	```
+- The comment must explain the **rationale**, not just restate the catch clause. "// ignored" or "// swallow" alone is not enough.
+
 ## Documentation
 
 - All documentation must be written in English.
@@ -168,10 +222,15 @@
 
 - `CHANGELOG.md` is the single source of truth for release notes.
 - The release workflow reads `## [Unreleased]` automatically to populate the GitHub Release body and the NuGet `<PackageReleaseNotes>` field.
-- Add a manual bullet under `## [Unreleased]` in `CHANGELOG.md` whenever you want a curated, consumer-friendly wording. Use the appropriate subsection:
+- **Every user-visible change must be accompanied by a `CHANGELOG.md` update in the same change set.** This is non-negotiable for: new or modified public API, behavioural changes, bug fixes, deprecations, removals. Pure internal refactors that do not alter observable behaviour are the only exemption.
+	- The changelog entry is part of the change, not an optional follow-up. Do not split it into a separate commit unless explicitly asked.
+	- If a single change set produces multiple user-visible effects, write one bullet per effect — do not bundle.
+- Add a manual bullet under `## [Unreleased]` in `CHANGELOG.md`. Use the appropriate subsection:
 	- `### Added` — new features or API members
 	- `### Changed` — modified behaviour or API
 	- `### Fixed` — bug fixes
+	- `### Removed` — removed features or API members
+	- `### Deprecated` — features still present but marked for removal
 - Write the entry for a consumer of the library, not the implementer. Keep it to one line.
 - Replace the placeholder `-` with a real bullet; do not leave placeholder lines alongside real entries.
 - Do not modify versioned sections (`## [1.0.0]`, etc.) — those are managed by the release workflow.
