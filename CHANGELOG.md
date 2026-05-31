@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+-
+
+### Changed
+-
+
+### Fixed
+-
+
+## [1.3.1] - 2026-05-31
+
+### Added
 - `ProcessGroupOptions` (`ShutdownTimeout`, `EscalateToKill`) and a `ProcessGroup(ProcessGroupOptions)` constructor to tune the Unix `SIGTERM` grace window and force-kill escalation. Ignored on Windows, where the Job Object terminates members atomically.
 - `ProcessRunOptions.ProcessGroupOptions` (configures the private group the runner creates) and `ProcessRunOptions.PumpTeardownTimeout` (bounds how long handle disposal waits for the output pumps).
 - `ProcessRunner(ProcessRunOptions defaults)` constructor: baseline options applied to every call, with per-call options overriding field-by-field (the environment is unioned, per-call key winning).
@@ -87,7 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rename package to `ProcessKit`, namespace to `ProcessKit`; publish to NuGet.org under MIT licence
 
-[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/ZelAnton/ProcessKit/compare/v1.1.0...v1.1.1
