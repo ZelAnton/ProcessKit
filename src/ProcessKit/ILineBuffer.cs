@@ -72,21 +72,22 @@ sealed class BoundedLineBuffer : ILineBuffer
 /// <summary>Retains nothing — every line is discarded. Used for <c>MaxBufferedLines == 0</c>.</summary>
 sealed class DiscardLineBuffer : ILineBuffer
 {
+	readonly TaskCompletionSource _completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
 	public void Write(string line)
 	{
 		// Intentionally discarded — the caller opted out of buffering (e.g. exit-code-only path).
 	}
 
-	public void Complete()
-	{
-		// Nothing to complete — ReadAllAsync already yields an empty, completed sequence.
-	}
+	public void Complete() => _completed.TrySetResult();
 
-	public IAsyncEnumerable<string> ReadAllAsync() => Empty();
-
-	static async IAsyncEnumerable<string> Empty()
+	public async IAsyncEnumerable<string> ReadAllAsync()
 	{
-		await Task.CompletedTask.ConfigureAwait(false);
+		// Yields nothing, but does NOT complete until the pump signals Complete() (in its finally,
+		// after reading EOF and firing every per-line handler). A consumer draining this buffer must
+		// still wait for the pump — returning an already-completed empty sequence would let dispose
+		// cancel the pump mid-read, dropping handler callbacks (and the last lines off the pipe).
+		await _completed.Task.ConfigureAwait(false);
 		yield break;
 	}
 }
