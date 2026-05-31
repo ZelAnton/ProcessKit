@@ -47,6 +47,14 @@ public interface IRunningProcess : IAsyncDisposable
 	/// </summary>
 	int StdErrLineCount { get; }
 
+	/// <summary>
+	/// Writer for the child's standard input, available <strong>only</strong> when the run was
+	/// started with <see cref="ProcessRunOptions.KeepStandardInputOpen"/> set; otherwise <c>null</c>
+	/// (stdin was closed at start). Use it to feed an interactive / REPL process over time, then
+	/// call <see cref="IProcessStandardInput.CompleteAsync"/> to signal end-of-input.
+	/// </summary>
+	IProcessStandardInput? StandardInput { get; }
+
 	/// <summary>The OS process id of the running process.</summary>
 	int Pid { get; }
 

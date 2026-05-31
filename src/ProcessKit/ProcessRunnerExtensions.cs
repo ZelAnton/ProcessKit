@@ -30,7 +30,7 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return runner.Start(BuildStartInfo(executable, arguments, options), options, cancellationToken);
+			return runner.Start(BuildStartInfo(executable, arguments), options, cancellationToken);
 		}
 
 		public IAsyncEnumerable<string> GetOutputAsync(
@@ -51,7 +51,7 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetOutputAsyncCore(runner, BuildStartInfo(executable, arguments, options), options, cancellationToken);
+			return GetOutputAsyncCore(runner, BuildStartInfo(executable, arguments), options, cancellationToken);
 		}
 	}
 
@@ -65,7 +65,7 @@ public static class ProcessRunnerExtensions
 		ProcessRunOptions? options,
 		[EnumeratorCancellation] CancellationToken cancellationToken)
 	{
-		await using var p = runner.Start(psi, options, cancellationToken);
+		await using var p = runner.Start(psi, CloseStdinForBulk(options), cancellationToken);
 		await foreach (var line in p.StdOut.WithCancellation(cancellationToken).ConfigureAwait(false))
 			yield return line;
 	}
@@ -96,7 +96,7 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetFirstLineOutputAsyncCore(runner, BuildStartInfo(executable, arguments, options), predicate, options, cancellationToken);
+			return GetFirstLineOutputAsyncCore(runner, BuildStartInfo(executable, arguments), predicate, options, cancellationToken);
 		}
 	}
 
@@ -138,7 +138,7 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetFullOutputAsyncCore(runner, BuildStartInfo(executable, arguments, options), options, cancellationToken);
+			return GetFullOutputAsyncCore(runner, BuildStartInfo(executable, arguments), options, cancellationToken);
 		}
 	}
 
@@ -148,7 +148,7 @@ public static class ProcessRunnerExtensions
 		ProcessRunOptions? options,
 		CancellationToken cancellationToken)
 	{
-		await using var p = runner.Start(psi, options, cancellationToken);
+		await using var p = runner.Start(psi, CloseStdinForBulk(options), cancellationToken);
 		return await ToResultAsyncCore(p, cancellationToken).ConfigureAwait(false);
 	}
 
@@ -193,7 +193,7 @@ public static class ProcessRunnerExtensions
 			ArgumentNullException.ThrowIfNull(runner);
 			ArgumentNullException.ThrowIfNull(startInfo);
 
-			return GetBytesOutputAsyncCore(startInfo, options, cancellationToken);
+			return GetBytesOutputAsyncCore(runner, startInfo, options, cancellationToken);
 		}
 
 		public Task<ProcessResult<byte[]>> GetBytesOutputAsync(
@@ -204,19 +204,26 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetBytesOutputAsyncCore(BuildStartInfo(executable, arguments, options), options, cancellationToken);
+			return GetBytesOutputAsyncCore(runner, BuildStartInfo(executable, arguments), options, cancellationToken);
 		}
 	}
 
 	static async Task<ProcessResult<byte[]>> GetBytesOutputAsyncCore(
+		IProcessRunner runner,
 		ProcessStartInfo source,
 		ProcessRunOptions? options,
 		CancellationToken cancellationToken)
 	{
+		// This path bypasses runner.Start (it needs a raw byte sink, not the line handle), so apply
+		// the runner's baseline options here too — otherwise GetBytesOutputAsync would silently
+		// ignore them while the other bulk helpers honor them.
+		if (runner is ProcessRunner concrete)
+			options = ProcessRunOptionsMerge.Merge(concrete.Defaults, options);
+
 		// Bytes path runs on the same ProcessSession lifecycle as the line handle, but with a raw
 		// byte sink for stdout instead of the line channel. The session disposes the sink.
 		var sink = new ByteBufferStdOutSink();
-		await using var session = new ProcessSession(source, options, sink, RealProcessHandleFactory.Instance, cancellationToken);
+		await using var session = new ProcessSession(source, CloseStdinForBulk(options), sink, RealProcessHandleFactory.Instance, cancellationToken);
 
 		// Await the raw stdout copy before reading the buffer — Completion can resolve before the
 		// pipe is fully drained. stderr is always line-oriented; accumulate it into a string.
@@ -251,7 +258,7 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetExitCodeAsyncCore(runner, BuildStartInfo(executable, arguments, options), options, cancellationToken);
+			return GetExitCodeAsyncCore(runner, BuildStartInfo(executable, arguments), options, cancellationToken);
 		}
 	}
 
@@ -262,8 +269,9 @@ public static class ProcessRunnerExtensions
 		CancellationToken cancellationToken)
 	{
 		// Nobody consumes the output here, so default to discarding it (memory-flat) unless the
-		// caller explicitly asked for a buffer policy. The pumps still drain the OS pipe.
-		options ??= new ProcessRunOptions();
+		// caller explicitly asked for a buffer policy. The pumps still drain the OS pipe. Also force
+		// stdin closed — this path exposes no writer.
+		options = CloseStdinForBulk(options) ?? new ProcessRunOptions();
 		if (options.OutputBuffer is null)
 			options = options with { OutputBuffer = new OutputBufferPolicy { MaxBufferedLines = 0 } };
 
@@ -366,31 +374,22 @@ public static class ProcessRunnerExtensions
 
 	// ──────────────────────────────────────────────────────────────────────────────────────
 
-	static ProcessStartInfo BuildStartInfo(string executable, IEnumerable<string> arguments, ProcessRunOptions? options)
+	// The bulk helpers expose no stdin writer, so leaving stdin open would hang a stdin-reading
+	// child forever. Force KeepStandardInputOpen off — interactive stdin is only meaningful through
+	// IProcessRunner.Start, which surfaces IRunningProcess.StandardInput.
+	static ProcessRunOptions? CloseStdinForBulk(ProcessRunOptions? options)
+		=> options is { KeepStandardInputOpen: true } ? options with { KeepStandardInputOpen = false } : options;
+
+	static ProcessStartInfo BuildStartInfo(string executable, IEnumerable<string> arguments)
 	{
 		ArgumentException.ThrowIfNullOrEmpty(executable);
 		ArgumentNullException.ThrowIfNull(arguments);
 
+		// Only FileName + args here. WorkingDirectory / Environment from options are applied by
+		// PrepareStartInfo so they take effect for every overload (and pick up runner defaults).
 		var psi = new ProcessStartInfo(executable);
 		foreach (var arg in arguments)
 			psi.ArgumentList.Add(arg);
-
-		// WorkingDirectory / Environment from options apply only to the convenience overloads — the
-		// PSI overloads carry these on the supplied ProcessStartInfo, which PrepareStartInfo clones.
-		if (options?.WorkingDirectory is { } workingDirectory)
-			psi.WorkingDirectory = workingDirectory;
-
-		if (options?.Environment is { } environment)
-		{
-			foreach (var (key, value) in environment)
-			{
-				if (value is null)
-					psi.Environment.Remove(key);
-				else
-					psi.Environment[key] = value;
-			}
-		}
-
 		return psi;
 	}
 }

@@ -46,6 +46,24 @@ static class PipePumpHelpers
 		foreach (var entry in source.Environment)
 			psi.Environment[entry.Key] = entry.Value;
 
+		// Options override the PSI (same precedence as the encoding overrides above): WorkingDirectory
+		// replaces, Environment entries are applied over the clone (a null value removes the variable).
+		// Applied here so they take effect uniformly — full-PSI and convenience overloads — and so
+		// runner-level defaults flow through.
+		if (options?.WorkingDirectory is { } workingDirectory)
+			psi.WorkingDirectory = workingDirectory;
+
+		if (options?.Environment is { } environment)
+		{
+			foreach (var (key, value) in environment)
+			{
+				if (value is null)
+					psi.Environment.Remove(key);
+				else
+					psi.Environment[key] = value;
+			}
+		}
+
 		return psi;
 	}
 

@@ -113,12 +113,31 @@ await using var asyncGroup = new ProcessGroup();
 `ProcessGroup` is **thread-safe**: `Start`, `Add`, `TerminateAll`, `GetStats`, and dispose
 may be called concurrently from multiple threads.
 
+Tune shutdown with `ProcessGroupOptions` (Unix only — on Windows the Job Object kills atomically):
+
+```csharp
+using var group = new ProcessGroup(new ProcessGroupOptions
+{
+    ShutdownTimeout = TimeSpan.FromSeconds(10),   // grace after SIGTERM before force-kill
+    EscalateToKill = true,                        // false → leave polite survivors running
+});
+```
+
 ## `ProcessRunner` — run external commands
 
 `ProcessRunner` wraps `ProcessGroup` under the hood, so every spawned process gets the same
 kill-on-dispose guarantee. The interface has a single method (`Start`); everything else is
 built on top as extension methods. For casual use without DI, `ProcessRunner.Default` is a
-shared, thread-safe singleton.
+shared, thread-safe singleton. For DI, register a runner with baseline options applied to every
+call (per-call options override field-by-field):
+
+```csharp
+IProcessRunner runner = new ProcessRunner(new ProcessRunOptions
+{
+    Timeout = TimeSpan.FromMinutes(2),
+    OutputBuffer = new OutputBufferPolicy { MaxBufferedLines = 10_000 },
+});
+```
 
 ```csharp
 using ProcessKit;
@@ -226,6 +245,25 @@ When you supply **no** input (the default, or `StandardInput.Empty`), the runner
 child's stdin immediately, so a process that reads stdin sees EOF at once rather than
 inheriting and blocking on the parent's stdin.
 
+### Interactive stdin
+
+For REPL / protocol processes you can keep stdin **open** and write to it over time. Set
+`KeepStandardInputOpen` and drive `IRunningProcess.StandardInput`, then signal end-of-input:
+
+```csharp
+await using var p = runner.Start("python", ["-i"], new ProcessRunOptions { KeepStandardInputOpen = true });
+
+await p.StandardInput!.WriteLineAsync("print(1 + 1)");
+// ... read p.StdOut concurrently, write more ...
+await p.StandardInput.CompleteAsync();   // close stdin → child sees EOF and exits
+var code = await p.Completion;
+```
+
+Writes are serialized internally and flushed each time. Consume `StdOut` from a separate task while
+writing (the library drains the pipes in the background, so the child won't block). Disposing the
+handle without calling `CompleteAsync` terminates the child. Interactive stdin is only available
+through `Start` — the bulk helpers force it off.
+
 ## Options
 
 `ProcessRunOptions` is a `record` — derive variants with `with`:
@@ -245,6 +283,9 @@ var slow = fast with { Timeout = TimeSpan.FromMinutes(5) };
 | `StdOutEncoding` / `StdErrEncoding` | Override decoding (defaults to UTF-8). |
 | `OutputBuffer` | Cap unconsumed stdout/stderr (`OutputBufferPolicy`, drop-oldest/newest). `null` → unbounded. |
 | `WorkingDirectory` / `Environment` | Working dir / env for the `Start(exe, args)` convenience overloads. |
+| `KeepStandardInputOpen` | Keep stdin open after start for interactive writing (see below). Default closed-at-start. |
+| `PumpTeardownTimeout` | How long `DisposeAsync` waits for the output pumps to drain. `null` → 5 s. |
+| `ProcessGroupOptions` | Shutdown options for the private group the runner creates (see below). |
 
 ### Bounding memory on unconsumed output
 
@@ -347,6 +388,13 @@ to the `ProcessKit` account. Inspect it with
 Build with `dotnet build` (warnings are errors) and run tests with
 `dotnet test tests/ProcessKit.Tests/ProcessKit.Tests.csproj`. Contributors on Windows can
 run the suite inside a Linux container — see [docs/linux-testing.md](docs/linux-testing.md).
+
+Benchmarks (BenchmarkDotNet, not part of CI or the package) live in `benchmarks/ProcessKit.Benchmarks`:
+
+```sh
+dotnet build ProcessKit.slnx -c Release
+dotnet run -c Release --project benchmarks/ProcessKit.Benchmarks --no-build -- --filter '*'
+```
 
 ## Changelog
 

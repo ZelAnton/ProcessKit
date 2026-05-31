@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to **ProcessKit** are documented in this file.
 
@@ -8,10 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
--
+- `ProcessGroupOptions` (`ShutdownTimeout`, `EscalateToKill`) and a `ProcessGroup(ProcessGroupOptions)` constructor to tune the Unix `SIGTERM` grace window and force-kill escalation. Ignored on Windows, where the Job Object terminates members atomically.
+- `ProcessRunOptions.ProcessGroupOptions` (configures the private group the runner creates) and `ProcessRunOptions.PumpTeardownTimeout` (bounds how long handle disposal waits for the output pumps).
+- `ProcessRunner(ProcessRunOptions defaults)` constructor: baseline options applied to every call, with per-call options overriding field-by-field (the environment is unioned, per-call key winning).
+- Interactive standard input: `ProcessRunOptions.KeepStandardInputOpen` keeps stdin open after start and exposes `IRunningProcess.StandardInput` (`IProcessStandardInput`: `WriteAsync`/`WriteLineAsync`/`FlushAsync`/`CompleteAsync`) for write-then-read (REPL) processes. The bulk helpers force it off.
+- A BenchmarkDotNet project (`benchmarks/ProcessKit.Benchmarks`) measuring process start/exit overhead, bulk-capture shapes, streaming throughput, and per-line pump cost. Not part of the package or CI.
 
 ### Changed
--
+- `ProcessRunOptions.WorkingDirectory` and `ProcessRunOptions.Environment` now apply to every overload (and are inherited from `ProcessRunner` defaults), taking precedence over the supplied `ProcessStartInfo`; previously they affected only the convenience `Start(executable, arguments, …)` overloads.
 
 ### Fixed
 -

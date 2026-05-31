@@ -8,15 +8,32 @@ public sealed class ProcessGroup : IDisposable, IAsyncDisposable
 	readonly IProcessGroupImpl _impl;
 	int _disposed;
 
-	public ProcessGroup()
+	/// <summary>Creates a process group with default shutdown behavior (<see cref="ProcessGroupOptions.Default"/>).</summary>
+	public ProcessGroup() : this(ProcessGroupOptions.Default) { }
+
+	/// <summary>Creates a process group with the given shutdown options.</summary>
+	public ProcessGroup(ProcessGroupOptions options) : this(SelectImpl(options)) { }
+
+	// Internal seam: lets tests inject a fake IProcessGroupImpl to exercise the façade
+	// (disposed guards, argument validation, delegation, dispose idempotency, pre-start
+	// cancellation) without spawning a real OS process.
+	internal ProcessGroup(IProcessGroupImpl impl)
 	{
+		ArgumentNullException.ThrowIfNull(impl);
+		_impl = impl;
+	}
+
+	static IProcessGroupImpl SelectImpl(ProcessGroupOptions options)
+	{
+		ArgumentNullException.ThrowIfNull(options);
+
 		if (OperatingSystem.IsWindows())
-			_impl = new WindowsJobObject();
-		else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
-			_impl = new UnixProcessGroup();
-		else
-			throw new PlatformNotSupportedException(
-				$"ProcessGroup is not supported on {RuntimeInformation.OSDescription}.");
+			return new WindowsJobObject(options);
+		if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+			return new UnixProcessGroup(options);
+
+		throw new PlatformNotSupportedException(
+			$"ProcessGroup is not supported on {RuntimeInformation.OSDescription}.");
 	}
 
 	public Process Start(ProcessStartInfo startInfo, CancellationToken cancellationToken = default)

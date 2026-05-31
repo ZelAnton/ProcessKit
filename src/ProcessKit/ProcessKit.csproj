@@ -42,6 +42,8 @@
 		<!-- Exposes internal seams (ProcessSession, sinks, IProcessHandle) to the test assembly so
 		     the lifecycle can be unit-tested against an in-memory fake. Test-only; not in the package. -->
 		<InternalsVisibleTo Include="ProcessKit.Tests" />
+		<!-- Lets the benchmark project drive the line pump via the same internal seam. -->
+		<InternalsVisibleTo Include="ProcessKit.Benchmarks" />
 	</ItemGroup>
 
 </Project>

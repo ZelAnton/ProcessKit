@@ -61,6 +61,9 @@ sealed class FakeProcessHandle : IProcessHandle
 		return Task.CompletedTask;
 	}
 
+	/// <summary>Bytes written to stdin (e.g. by the interactive writer). Readable after the stream is closed.</summary>
+	internal byte[] CapturedStdin() => _stdinStream.ToArray();
+
 	/// <summary>Marks the process exited without firing the event — for the "already exited at construction" race.</summary>
 	internal void PresetExited() => Volatile.Write(ref _hasExited, 1);
 

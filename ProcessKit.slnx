@@ -7,5 +7,10 @@
 			<BuildDependency Project="src/ProcessKit/ProcessKit.csproj" />
 		</Project>
 	</Folder>
+	<Folder Name="/Benchmarks/">
+		<Project Path="benchmarks/ProcessKit.Benchmarks/ProcessKit.Benchmarks.csproj">
+			<BuildDependency Project="src/ProcessKit/ProcessKit.csproj" />
+		</Project>
+	</Folder>
 	<Project Path="src/ProcessKit/ProcessKit.csproj" />
 </Solution>

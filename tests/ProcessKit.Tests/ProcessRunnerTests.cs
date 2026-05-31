@@ -365,6 +365,84 @@ public class ProcessRunnerTests
 	}
 
 	[Test]
+	public async Task RunnerDefaults_ApplyWhenPerCallOmits_AndOverrideWhenSet()
+	{
+		var runnerWithTimeout = new ProcessRunner(new ProcessRunOptions { Timeout = TimeSpan.FromMilliseconds(300) });
+
+		// Default timeout applies (no per-call options) → the sleep is killed.
+		var timedOut = await runnerWithTimeout.GetFullOutputAsync(TestExe.Sleep(30));
+		Assert.That(timedOut.WasTimedOut, Is.True);
+
+		// Per-call overrides the default → a quick echo completes normally.
+		var quick = await runnerWithTimeout.GetFullOutputAsync(TestExe.Echo("hi"), new ProcessRunOptions { Timeout = TimeSpan.FromSeconds(30) });
+		Assert.That(quick.WasTimedOut, Is.False);
+		Assert.That(quick.StdOut, Does.Contain("hi"));
+	}
+
+	[Test]
+	public void ProcessRunner_NullDefaults_Throws()
+	{
+		Assert.Throws<ArgumentNullException>(() => new ProcessRunner(null!));
+	}
+
+	[Test]
+	public async Task RunnerDefault_WorkingDirectory_AppliesToConvenienceOverload()
+	{
+		var tempDir = Directory.CreateTempSubdirectory("processkit-rd-wd-");
+		try
+		{
+			var runner = new ProcessRunner(new ProcessRunOptions { WorkingDirectory = tempDir.FullName });
+			var result = OperatingSystem.IsWindows()
+				? await runner.GetFullOutputAsync("cmd", ["/c", "cd"])
+				: await runner.GetFullOutputAsync("sh", ["-c", "pwd"]);
+
+			Assert.That(result.StdOut, Does.Contain(tempDir.Name));
+		}
+		finally
+		{
+			tempDir.Delete(recursive: true);
+		}
+	}
+
+	[Test]
+	public async Task RunnerDefault_Environment_AppliesToConvenienceOverload()
+	{
+		var runner = new ProcessRunner(new ProcessRunOptions
+		{
+			Environment = new Dictionary<string, string?> { ["PROCESSKIT_RD_VAR"] = "from-default" },
+		});
+
+		var result = OperatingSystem.IsWindows()
+			? await runner.GetFullOutputAsync("cmd", ["/c", "echo %PROCESSKIT_RD_VAR%"])
+			: await runner.GetFullOutputAsync("sh", ["-c", "echo $PROCESSKIT_RD_VAR"]);
+
+		Assert.That(result.StdOut.Trim(), Is.EqualTo("from-default"));
+	}
+
+	[Test]
+	public async Task RunnerDefault_GetBytesOutputAsync_HonorsDefaultTimeout()
+	{
+		var runner = new ProcessRunner(new ProcessRunOptions { Timeout = TimeSpan.FromMilliseconds(300) });
+
+		var result = await runner.GetBytesOutputAsync(TestExe.Sleep(30));
+
+		Assert.That(result.WasTimedOut, Is.True);
+	}
+
+	[Test]
+	public async Task RunnerDefault_KeepStandardInputOpen_DoesNotLeakIntoBulkHelper()
+	{
+		// Even if a runner is (oddly) configured with KeepStandardInputOpen, a bulk helper must
+		// still close stdin so a stdin-reading child gets EOF and exits rather than hanging.
+		var runner = new ProcessRunner(new ProcessRunOptions { KeepStandardInputOpen = true });
+		using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+		var result = await runner.GetFullOutputAsync(TestExe.EchoStdin(), cancellationToken: cts.Token);
+
+		Assert.That(result.StdOut.Trim(), Is.Empty);
+	}
+
+	[Test]
 	public async Task ProcessRunner_Default_IsUsable()
 	{
 		var result = await ProcessRunner.Default.GetFullOutputAsync(TestExe.Echo("via-default"));
@@ -424,6 +502,43 @@ public class ProcessRunnerTests
 		var code = await p.CompletionOrThrowAsync();
 
 		Assert.That(code, Is.Zero);
+	}
+
+	[Test]
+	public async Task InteractiveStdin_RoundTripsThroughHandle()
+	{
+		var runner = new ProcessRunner();
+		// EchoStdin echoes each stdin line back. With KeepStandardInputOpen we write over time, then
+		// signal EOF so the child exits.
+		await using var p = runner.Start(TestExe.EchoStdin(), new ProcessRunOptions { KeepStandardInputOpen = true });
+
+		Assert.That(p.StandardInput, Is.Not.Null);
+		await p.StandardInput!.WriteLineAsync("ping");
+		await p.StandardInput.WriteLineAsync("pong");
+		await p.StandardInput.CompleteAsync();
+
+		var lines = new List<string>();
+		await foreach (var line in p.StdOut)
+			lines.Add(line);
+		await p.Completion;
+
+		Assert.That(lines, Does.Contain("ping"));
+		Assert.That(lines, Does.Contain("pong"));
+	}
+
+	[Test]
+	public async Task BulkHelper_IgnoresKeepStandardInputOpen_DoesNotHang()
+	{
+		// A bulk helper exposes no writer; it must force stdin closed so a stdin-reading child still
+		// gets EOF and exits rather than hanging. The cancellation token is a safety net.
+		var runner = new ProcessRunner();
+		using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+		var result = await runner.GetFullOutputAsync(
+			TestExe.EchoStdin(),
+			new ProcessRunOptions { KeepStandardInputOpen = true },
+			cts.Token);
+
+		Assert.That(result.StdOut.Trim(), Is.Empty);
 	}
 
 	[Test]

@@ -77,18 +77,41 @@ public sealed record ProcessRunOptions
 	public OutputBufferPolicy? OutputBuffer { get; init; }
 
 	/// <summary>
-	/// Working directory for the convenience <c>Start(executable, arguments, …)</c> overloads.
-	/// Ignored when a full <see cref="System.Diagnostics.ProcessStartInfo"/> is supplied — set
-	/// <see cref="System.Diagnostics.ProcessStartInfo.WorkingDirectory"/> on the PSI instead.
-	/// <c>null</c> inherits the current directory.
+	/// Working directory for the process. When set, it takes precedence over any
+	/// <see cref="System.Diagnostics.ProcessStartInfo.WorkingDirectory"/> on the supplied PSI (same
+	/// override precedence as the encoding options). <c>null</c> leaves the PSI's value as-is.
 	/// </summary>
 	public string? WorkingDirectory { get; init; }
 
 	/// <summary>
-	/// Environment variables for the convenience <c>Start(executable, arguments, …)</c> overloads,
-	/// applied over the inherited environment; a <c>null</c> value removes the variable. Ignored
-	/// when a full <see cref="System.Diagnostics.ProcessStartInfo"/> is supplied — set
-	/// <see cref="System.Diagnostics.ProcessStartInfo.Environment"/> on the PSI instead.
+	/// Environment variables applied over the process environment after it is cloned from the PSI;
+	/// a <c>null</c> value removes the variable. Entries here take precedence over the PSI's own
+	/// environment. <c>null</c> leaves the PSI's environment unchanged.
 	/// </summary>
 	public IReadOnlyDictionary<string, string?>? Environment { get; init; }
+
+	/// <summary>
+	/// How long <see cref="IRunningProcess.DisposeAsync"/> waits for the stdout/stderr/stdin pump
+	/// tasks to wind down before giving up. Bounds teardown so a stuck OS pipe cannot hang dispose
+	/// forever. <c>null</c> uses the 5-second default.
+	/// </summary>
+	public TimeSpan? PumpTeardownTimeout { get; init; }
+
+	/// <summary>
+	/// Shutdown behavior for the <strong>private</strong> <see cref="ProcessKit.ProcessGroup"/> the
+	/// runner creates when <see cref="ProcessGroup"/> is <c>null</c>. Ignored when a caller-owned
+	/// <see cref="ProcessGroup"/> is supplied — that group already carries its own options and the
+	/// runner never reconfigures it. <c>null</c> uses <see cref="ProcessGroupOptions.Default"/>.
+	/// </summary>
+	public ProcessGroupOptions? ProcessGroupOptions { get; init; }
+
+	/// <summary>
+	/// When <c>true</c>, the child's stdin is left <strong>open</strong> after start so the caller
+	/// can write to it over time via <see cref="IRunningProcess.StandardInput"/> (interactive /
+	/// REPL processes). The caller must signal end-of-input (<see cref="IProcessStandardInput.CompleteAsync"/>)
+	/// or dispose the handle. Default <c>false</c> keeps the "stdin closed at start" contract.
+	/// Honored only by <see cref="IProcessRunner.Start(System.Diagnostics.ProcessStartInfo, ProcessRunOptions?, CancellationToken)"/>;
+	/// the bulk helpers (which expose no writer) force it off to avoid hanging a stdin-reading child.
+	/// </summary>
+	public bool KeepStandardInputOpen { get; init; }
 }

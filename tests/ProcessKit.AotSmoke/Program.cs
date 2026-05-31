@@ -38,6 +38,24 @@ if (runnerResult.ExitCode != 0 || !runnerResult.StdOut.Contains("runner-aot", St
 	return 1;
 }
 
+// Exercise the interactive-stdin path (ProcessStandardInputWriter, KeepStandardInputOpen) under AOT.
+string? echoed = null;
+await using (var interactive = ProcessRunner.Default.Start("/bin/sh", ["-c", "cat"], new ProcessRunOptions { KeepStandardInputOpen = true }))
+{
+	await interactive.StandardInput!.WriteLineAsync("interactive-aot");
+	await interactive.StandardInput.CompleteAsync();
+	await foreach (var line in interactive.StdOut)
+	{
+		echoed = line;
+		break;
+	}
+}
+if (echoed != "interactive-aot")
+{
+	Console.Error.WriteLine($"AOT smoke FAIL: interactive stdin echoed '{echoed}'");
+	return 1;
+}
+
 Console.WriteLine(
 	$"AOT smoke OK. exit={child.ExitCode} active={stats.ActiveProcessCount} " +
 	$"cpu={stats.TotalCpuTime} peakMem={stats.PeakMemoryBytes} runner='{runnerResult.StdOut.Trim()}'");

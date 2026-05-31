@@ -40,7 +40,11 @@ The library namespace is `ProcessKit`; the two public surfaces are `ProcessGroup
 
 - **`WindowsJobObject`** — wraps a Windows [Job Object](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects) with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. All assigned processes are killed atomically when the job handle is closed (on `Dispose`). Native interop lives in `Kernel32.cs` (`[LibraryImport]`, `SafeFileHandle` for the job handle).
 
-- **`UnixProcessGroup`** — creates a POSIX process group (`setpgid`) with the first process's PID as the group leader. On `Dispose`, sends `SIGTERM` to `-pgid` (the whole group), waits up to 2 seconds (monotonic, via `Stopwatch`), then falls back to `Process.Kill(entireProcessTree: true)` for any survivors. Native interop lives in `Libc.cs`.
+- **`UnixProcessGroup`** — creates a POSIX process group (`setpgid`) with the first process's PID as the group leader. On `Dispose`, sends `SIGTERM` to `-pgid` (the whole group), waits up to `ProcessGroupOptions.ShutdownTimeout` (default 2 s, monotonic via `Stopwatch`), then — if `EscalateToKill` (default true) — falls back to `Process.Kill(entireProcessTree: true)` for any survivors. Native interop lives in `Libc.cs`.
+
+`ProcessGroupOptions` (`ShutdownTimeout`, `EscalateToKill`) is passed via `new ProcessGroup(options)`; the parameterless ctor uses `ProcessGroupOptions.Default`. It is **Unix-only** — `WindowsJobObject` accepts but ignores it (the Job Object kills atomically on handle close, with no soft-signal grace to tune). The OS branch lives in `ProcessGroup.SelectImpl`.
+
+**Lifetime test seam:** `ProcessGroup` also has an internal `ProcessGroup(IProcessGroupImpl impl)` ctor so a `FakeProcessGroupImpl` (in tests) can exercise the façade — disposed guards, argument validation, delegation, dispose idempotency, pre-start cancellation — without spawning a real process ([ProcessGroupFacadeTests.cs](tests/ProcessKit.Tests/ProcessGroupFacadeTests.cs)). Honest limit (mirrors the `IProcessHandle` seam): `RegisterKillOnCancel` needs a real `Process`, so the cancel-after-start kill path stays an integration test.
 
 Native P/Invoke declarations are isolated in `Kernel32.cs` / `Libc.cs` as `static partial` classes (one per DLL), using `[LibraryImport]` exclusively — no `[DllImport]`, no `CsWin32`, no `NativeMethods.txt`. The platform-specific impl classes pull them in via `using static`.
 
@@ -115,6 +119,10 @@ Everything else (`GetOutputAsync`, `GetFirstLineOutputAsync`, `GetFullOutputAsyn
 
 `ProcessRunner.Default` is a static singleton for callers that don't use DI: `await ProcessRunner.Default.GetFullOutputAsync(...)`. The runner is stateless so the singleton is thread-safe.
 
+`new ProcessRunner(ProcessRunOptions defaults)` gives a runner with baseline options merged into every call by [ProcessRunOptionsMerge](src/ProcessKit/ProcessRunOptionsMerge.cs) (called once in `Start`; the bytes path applies it explicitly since it bypasses `Start`). Per-call options win field-by-field; `Environment` is unioned (per-call key wins, `StringComparer.Ordinal`); `KeepStandardInputOpen` is per-call only (never inherited — incl. the `perCall == null` fast path, so a default can't re-enable interactive stdin through a bulk helper). `WorkingDirectory`/`Environment` are applied in `PrepareStartInfo` (options override the cloned PSI), so they take effect for every overload and pick up runner defaults.
+
+**Interactive stdin:** with `ProcessRunOptions.KeepStandardInputOpen`, the runner leaves stdin open and surfaces `IRunningProcess.StandardInput` (`IProcessStandardInput`, backed by [ProcessStandardInputWriter](src/ProcessKit/ProcessStandardInputWriter.cs)) — `SemaphoreSlim`-serialized writes, idempotent `CompleteAsync` (closes stdin → child EOF). Combining it with an up-front `StandardInput` throws `ArgumentException`. The **bulk helpers force it off** (`CloseStdinForBulk`) — they expose no writer, so an open stdin would hang a stdin-reading child.
+
 #### `ProcessSession` — the single lifecycle core
 
 [ProcessSession](src/ProcessKit/ProcessSession.cs) (internal) owns the **entire** process lifecycle exactly once: group ownership (private/shared), `_killCts` (linked to the caller token), the separate `_timeoutCts` cascade that drives `WasTimedOut`, exit handling (`OnProcessExited`, the `_exitedHandled` guard, diagnostics caching), stdin/stdout/stderr pump orchestration, and the bounded 5 s `DisposeAsync` teardown. Both consumers are thin layers over it:
@@ -170,12 +178,15 @@ public sealed record ProcessRunOptions
     public Encoding? StdOutEncoding { get; init; }                  // overrides PSI; UTF-8 fallback
     public Encoding? StdErrEncoding { get; init; }
     public OutputBufferPolicy? OutputBuffer { get; init; }          // null → unbounded; caps the unconsumed backlog (non-blocking drop)
-    public string? WorkingDirectory { get; init; }                 // convenience (exe,args) overloads only
-    public IReadOnlyDictionary<string, string?>? Environment { get; init; }  // convenience overloads only; null value removes a var
+    public string? WorkingDirectory { get; init; }                 // applied in PrepareStartInfo; overrides the PSI
+    public IReadOnlyDictionary<string, string?>? Environment { get; init; }  // applied over the cloned env; null value removes a var
+    public TimeSpan? PumpTeardownTimeout { get; init; }            // null → 5s; bounds DisposeAsync's wait for pumps
+    public ProcessGroupOptions? ProcessGroupOptions { get; init; } // configures the PRIVATE auto-created group only
+    public bool KeepStandardInputOpen { get; init; }               // opt-in interactive stdin (Start only)
 }
 ```
 
-`OutputBuffer` (`OutputBufferPolicy { int? MaxBufferedLines; OutputOverflowMode Overflow }`) caps the in-memory backlog of unconsumed lines per stream; the pump always keeps draining the OS pipe (drop, never block). `GetExitCodeAsync` auto-sets `MaxBufferedLines = 0` (discard) when the caller gives no policy, since it never exposes output. `WorkingDirectory`/`Environment` apply **only** to the `Start(exe, args)` convenience overloads (`BuildStartInfo`); for the `ProcessStartInfo` overloads, set them on the PSI.
+`OutputBuffer` (`OutputBufferPolicy { int? MaxBufferedLines; OutputOverflowMode Overflow }`) caps the in-memory backlog of unconsumed lines per stream; the pump always keeps draining the OS pipe (drop, never block). `GetExitCodeAsync` auto-sets `MaxBufferedLines = 0` (discard) when the caller gives no policy, since it never exposes output. `WorkingDirectory`/`Environment` are applied in `PrepareStartInfo` over the cloned PSI (options take precedence; a `null` env value removes the variable) — uniform across all overloads, and they pick up runner defaults.
 
 Declared as a `record class` so callers can derive variants via `with`-expression: `var slow = fast with { Timeout = TimeSpan.FromMinutes(5) };`. Equality is structural (handlers compared via `Delegate.Equals`, `ProcessGroup` by reference).
 
@@ -222,7 +233,11 @@ The runner itself never throws on non-zero exit — it always returns the result
 
 Both `tests/ProcessKit.Tests` and `tests/ProcessKit.AotSmoke` reference the library via direct `<Reference Include="ProcessKit" />` + `AssemblySearchPaths` (not `<ProjectReference>`). Build ordering comes from `BuildDependency` entries in `ProcessKit.slnx`. Run tests after a `dotnet build` or let the test runner build implicitly.
 
-`tests/ProcessKit.AotSmoke` sets `<PublishAot>true</PublishAot>` in the csproj, so AOT analyzers (`IL2xxx`/`IL3xxx`) run on every `dotnet build` of the solution — not only at `dotnet publish` time. Native AOT compilation itself still happens only at publish. The CI `aot-publish` job runs the published binary, so code that AOT-strips at runtime (e.g. unannotated reflection) breaks CI even if compilation succeeded.
+`tests/ProcessKit.AotSmoke` sets `<PublishAot>true</PublishAot>` in the csproj, so AOT analyzers (`IL2xxx`/`IL3xxx`) run on every `dotnet build` of the solution — not only at `dotnet publish` time. Native AOT compilation itself still happens only at publish. The CI `aot-publish` job runs the published binary (now exercising `ProcessGroup`, `ProcessRunner`, and interactive stdin), so code that AOT-strips at runtime (e.g. unannotated reflection) breaks CI even if compilation succeeded.
+
+### Benchmarks
+
+`benchmarks/ProcessKit.Benchmarks` is a BenchmarkDotNet console app (`IsPackable=false`, not in the package or CI). It references the library via `<Reference … Private="true">` (the `Private` copies `ProcessKit.dll` to output so BDN's runtime-generated bootstrap resolves it) and gets internals via `<InternalsVisibleTo>` for the fake-driven line-pump microbench. Because it uses `<Reference>` (not `ProjectReference`), build the library in Release first: `dotnet build ProcessKit.slnx -c Release` then `dotnet run -c Release --project benchmarks/ProcessKit.Benchmarks --no-build -- --filter '*'`. BDN uses reflection/codegen, so this project is intentionally **not** AOT-compatible and is excluded from the AOT smoke.
 
 ### Linux testing from Windows
 

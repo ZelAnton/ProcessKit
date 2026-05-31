@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<IsPackable>false</IsPackable>
+		<RootNamespace>ProcessKit.Benchmarks</RootNamespace>
+		<!-- BenchmarkDotNet requires public mutable [Params] fields, instance benchmark methods,
+		     and uses reflection/codegen — so CA1051/CA1819/CA1822 don't apply here. -->
+		<NoWarn>$(NoWarn);CA1051;CA1819;CA1822;CA5394;CA1707</NoWarn>
+		<AssemblySearchPaths>$(AssemblySearchPaths);$(ProcessKitProjectDir)bin\$(Configuration)\$(TargetFramework)</AssemblySearchPaths>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="BenchmarkDotNet" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- Private=true copies ProcessKit.dll to the output so BenchmarkDotNet's generated
+		     bootstrap project can resolve it at runtime. -->
+		<Reference Include="ProcessKit">
+			<Private>true</Private>
+		</Reference>
+	</ItemGroup>
+
+</Project>

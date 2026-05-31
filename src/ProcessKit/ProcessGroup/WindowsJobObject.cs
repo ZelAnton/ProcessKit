@@ -12,8 +12,13 @@ sealed class WindowsJobObject : IProcessGroupImpl
 {
 	readonly SafeFileHandle _jobHandle;
 
-	public WindowsJobObject()
+	// options is accepted for parity with UnixProcessGroup but intentionally unused: a Job Object
+	// with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE terminates all members atomically when the handle is
+	// closed, so there is no SIGTERM-style grace window to honor and no soft-signal to escalate from.
+	public WindowsJobObject(ProcessGroupOptions options)
 	{
+		ArgumentNullException.ThrowIfNull(options);
+
 		_jobHandle = CreateJobObjectW(nint.Zero, null);
 		if (_jobHandle.IsInvalid)
 			throw new Win32Exception(Marshal.GetLastWin32Error());

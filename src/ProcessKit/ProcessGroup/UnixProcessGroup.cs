@@ -12,7 +12,14 @@ sealed class UnixProcessGroup : IProcessGroupImpl
 {
 	readonly Lock _lock = new();
 	readonly List<Process> _processes = [];
+	readonly ProcessGroupOptions _options;
 	int _pgid;
+
+	public UnixProcessGroup(ProcessGroupOptions options)
+	{
+		ArgumentNullException.ThrowIfNull(options);
+		_options = options;
+	}
 
 	public Process StartAndAdd(ProcessStartInfo startInfo)
 	{
@@ -127,14 +134,14 @@ sealed class UnixProcessGroup : IProcessGroupImpl
 		SignalAll(pgid, snapshot);
 
 		var start = Stopwatch.GetTimestamp();
-		var timeout = TimeSpan.FromSeconds(2);
+		var timeout = _options.ShutdownTimeout;
 		foreach (var process in snapshot)
 		{
 			try
 			{
 				var remaining = timeout - Stopwatch.GetElapsedTime(start);
 				var remainingMs = remaining > TimeSpan.Zero ? (int)remaining.TotalMilliseconds : 0;
-				if (!process.HasExited && !process.WaitForExit(remainingMs))
+				if (!process.HasExited && !process.WaitForExit(remainingMs) && _options.EscalateToKill)
 					process.Kill(entireProcessTree: true);
 			}
 			catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
@@ -158,7 +165,7 @@ sealed class UnixProcessGroup : IProcessGroupImpl
 		SignalAll(pgid, snapshot);
 
 		var start = Stopwatch.GetTimestamp();
-		var timeout = TimeSpan.FromSeconds(2);
+		var timeout = _options.ShutdownTimeout;
 		foreach (var process in snapshot)
 		{
 			try
@@ -176,10 +183,11 @@ sealed class UnixProcessGroup : IProcessGroupImpl
 					}
 					catch (OperationCanceledException)
 					{
+						// grace window elapsed — fall through to escalation (if enabled)
 					}
 				}
 
-				if (!process.HasExited)
+				if (!process.HasExited && _options.EscalateToKill)
 					process.Kill(entireProcessTree: true);
 			}
 			catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)

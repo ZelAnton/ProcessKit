@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace ProcessKit;
 
@@ -19,11 +20,13 @@ sealed class ProcessSession : IAsyncDisposable
 	readonly Task _stdoutPump;
 	readonly Task _stderrPump;
 	readonly Task _stdinTask;
+	readonly ProcessStandardInputWriter? _interactiveInput;
 	readonly TaskCompletionSource<int> _completionTcs;
 	readonly CancellationTokenSource _exitedCts;
 	readonly CancellationTokenSource _killCts;
 	readonly CancellationTokenSource? _timeoutCts;
 	readonly Stopwatch _stopwatch;
+	readonly TimeSpan _pumpTeardownTimeout;
 	int _stderrLineCount;
 	int _disposed;
 	int _exitedHandled;
@@ -114,6 +117,10 @@ sealed class ProcessSession : IAsyncDisposable
 	// channel already waits for the pump to complete the buffer.
 	public Task StdOutPumpCompletion => _stdoutPump;
 
+	// Writer for interactive stdin; non-null only when KeepStandardInputOpen was set. Surfaced via
+	// IRunningProcess.StandardInput.
+	public IProcessStandardInput? InteractiveInput => _interactiveInput;
+
 	internal ProcessSession(
 		ProcessStartInfo startInfo,
 		ProcessRunOptions? options,
@@ -121,12 +128,18 @@ sealed class ProcessSession : IAsyncDisposable
 		IProcessHandleFactory handleFactory,
 		CancellationToken cancellationToken)
 	{
+		if (options?.KeepStandardInputOpen == true && options.StandardInput is not null and not StandardInput.EmptyInput)
+			throw new ArgumentException(
+				"Set either StandardInput or KeepStandardInputOpen, not both. For interactive stdin, write all input (including any initial data) via IRunningProcess.StandardInput.",
+				nameof(options));
+
 		var psi = PipePumpHelpers.PrepareStartInfo(startInfo, options);
 
 		_stdOutSink = stdOutSink;
 		_ownsGroup = options?.ProcessGroup is null;
-		_group = options?.ProcessGroup ?? new ProcessGroup();
+		_group = options?.ProcessGroup ?? new ProcessGroup(options?.ProcessGroupOptions ?? ProcessGroupOptions.Default);
 		_stderrBuffer = ILineBuffer.Create(options?.OutputBuffer);
+		_pumpTeardownTimeout = options?.PumpTeardownTimeout ?? TimeSpan.FromSeconds(5);
 
 		_killCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 		if (options?.Timeout is { } timeout)
@@ -176,7 +189,17 @@ sealed class ProcessSession : IAsyncDisposable
 				() => Interlocked.Increment(ref _stderrLineCount),
 				_killCts.Token);
 
-			_stdinTask = PipePumpHelpers.WriteStandardInputAsync(_handle, options?.StandardInput, _killCts.Token);
+			if (options?.KeepStandardInputOpen == true)
+			{
+				// Leave stdin open; the caller drives it via IRunningProcess.StandardInput and signals
+				// EOF with CompleteAsync. No pump task — there is no fixed source to drain.
+				_interactiveInput = new ProcessStandardInputWriter(_handle.StandardInput, Encoding.UTF8);
+				_stdinTask = Task.CompletedTask;
+			}
+			else
+			{
+				_stdinTask = PipePumpHelpers.WriteStandardInputAsync(_handle, options?.StandardInput, _killCts.Token);
+			}
 		}
 		catch
 		{
@@ -326,7 +349,7 @@ sealed class ProcessSession : IAsyncDisposable
 		// Bounded wait for pumps and stdin to wind down. We use a token-based timeout (vs WaitAsync(TimeSpan))
 		// so the timeout surfaces as OperationCanceledException — caught by ObserveAsync along with the
 		// other expected teardown exceptions, keeping the semantics uniform.
-		using var teardownCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+		using var teardownCts = new CancellationTokenSource(_pumpTeardownTimeout);
 		var pumpTask = Task.WhenAll(_stdoutPump, _stderrPump, _stdinTask);
 		await PipePumpHelpers.ObserveAsync(pumpTask.WaitAsync(teardownCts.Token)).ConfigureAwait(false);
 
@@ -358,6 +381,7 @@ sealed class ProcessSession : IAsyncDisposable
 		}
 
 		(_stdOutSink as IDisposable)?.Dispose();
+		_interactiveInput?.Dispose();
 
 		// Same ordering as the constructor catch — see explanation there.
 		_timeoutCts?.Dispose();

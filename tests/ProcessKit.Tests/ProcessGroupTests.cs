@@ -310,6 +310,43 @@ public class ProcessGroupTests
 		Assert.That(group.GetStats().ActiveProcessCount, Is.GreaterThanOrEqualTo(10));
 	}
 
+	[Test]
+	public void Ctor_NullOptions_Throws()
+	{
+		Assert.Throws<ArgumentNullException>(() => new ProcessGroup((ProcessGroupOptions)null!));
+	}
+
+	[Test]
+	public void Dispose_Windows_IgnoresShutdownTimeout()
+	{
+		Assume.That(OperatingSystem.IsWindows());
+
+		var sw = Stopwatch.StartNew();
+		using (var group = new ProcessGroup(new ProcessGroupOptions { ShutdownTimeout = TimeSpan.FromMinutes(10) }))
+		{
+			group.Start(LongRunningProcess());
+		}
+		sw.Stop();
+
+		// The Job Object kills all members atomically on handle close — the (huge) timeout is
+		// irrelevant on Windows, so dispose must not wait for it.
+		Assert.That(sw.Elapsed, Is.LessThan(TimeSpan.FromSeconds(10)));
+	}
+
+	[Test]
+	public void Dispose_OnUnix_CustomShutdownTimeout_TerminatesProcesses()
+	{
+		Assume.That(!OperatingSystem.IsWindows());
+
+		Process process;
+		using (var group = new ProcessGroup(new ProcessGroupOptions { ShutdownTimeout = TimeSpan.FromSeconds(1) }))
+		{
+			process = group.Start(LongRunningProcess());
+		}
+
+		Assert.That(process.WaitForExit(5_000), Is.True);
+	}
+
 	static ProcessStartInfo LongRunningProcess()
 		=> OperatingSystem.IsWindows()
 			? new ProcessStartInfo("ping", ["-n", "9999", "127.0.0.1"]) {

@@ -22,6 +22,7 @@ sealed class RunningProcess : IRunningProcess
 
 	public IAsyncEnumerable<string> StdOut => _stdOutSink.ReadAllAsync();
 	public IAsyncEnumerable<string> StdErr => _session.StdErr;
+	public IProcessStandardInput? StandardInput => _session.InteractiveInput;
 	public int StdOutLineCount => _stdOutSink.LineCount;
 	public int StdErrLineCount => _session.StdErrLineCount;
 	public int Pid => _session.Pid;

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace ProcessKit.Tests;
 
@@ -182,6 +183,78 @@ public class ProcessSessionTests
 
 		Assert.That(sink.LineCount, Is.EqualTo(5));                          // every line counted off the pipe
 		Assert.That(retained, Is.EqualTo((string[])["l4", "l5"]));          // only the newest 2 retained
+	}
+
+	[Test]
+	public async Task KeepStandardInputOpen_ExposesWriter_AndWritesReachStdin()
+	{
+		var handle = new FakeProcessHandle();
+		var sink = new LineChannelStdOutSink(null);
+		await using var session = NewSession(handle, sink, new ProcessRunOptions { KeepStandardInputOpen = true });
+
+		Assert.That(session.InteractiveInput, Is.Not.Null);
+		await session.InteractiveInput!.WriteLineAsync("hello");
+		await session.InteractiveInput.CompleteAsync();
+
+		Assert.That(Encoding.UTF8.GetString(handle.CapturedStdin()), Does.Contain("hello"));
+	}
+
+	[Test]
+	public async Task NoKeepStandardInputOpen_InteractiveInputIsNull()
+	{
+		var handle = new FakeProcessHandle();
+		var sink = new LineChannelStdOutSink(null);
+		await using var session = NewSession(handle, sink);
+
+		Assert.That(session.InteractiveInput, Is.Null);
+	}
+
+	[Test]
+	public async Task InteractiveInput_WriteAfterComplete_Throws()
+	{
+		var handle = new FakeProcessHandle();
+		var sink = new LineChannelStdOutSink(null);
+		await using var session = NewSession(handle, sink, new ProcessRunOptions { KeepStandardInputOpen = true });
+
+		await session.InteractiveInput!.CompleteAsync();
+
+		Assert.ThrowsAsync<InvalidOperationException>(async () => await session.InteractiveInput!.WriteLineAsync("x"));
+	}
+
+	[Test]
+	public async Task InteractiveInput_CompleteAsync_IsIdempotent()
+	{
+		var handle = new FakeProcessHandle();
+		var sink = new LineChannelStdOutSink(null);
+		await using var session = NewSession(handle, sink, new ProcessRunOptions { KeepStandardInputOpen = true });
+
+		await session.InteractiveInput!.CompleteAsync();
+		Assert.DoesNotThrowAsync(async () => await session.InteractiveInput!.CompleteAsync());
+	}
+
+	[Test]
+	public void KeepStandardInputOpen_WithUpfrontStandardInput_Throws()
+	{
+		var handle = new FakeProcessHandle();
+		var sink = new LineChannelStdOutSink(null);
+		var options = new ProcessRunOptions { KeepStandardInputOpen = true, StandardInput = StandardInput.FromString("x") };
+
+		Assert.Throws<ArgumentException>(() => NewSession(handle, sink, options));
+	}
+
+	[Test]
+	public async Task PumpTeardownTimeout_Option_IsAcceptedAndDisposesCleanly()
+	{
+		var handle = new FakeProcessHandle(stdout: "x\n"u8.ToArray(), exitCode: 0);
+		var sink = new LineChannelStdOutSink(null);
+		var options = new ProcessRunOptions { PumpTeardownTimeout = TimeSpan.FromMilliseconds(250) };
+		var session = NewSession(handle, sink, options);
+
+		handle.RaiseExited();
+		await session.Completion;
+		await session.DisposeAsync(); // honors the configured teardown budget; must not throw
+
+		Assert.That(session.Completion.IsCompletedSuccessfully, Is.True);
 	}
 
 	[Test]
