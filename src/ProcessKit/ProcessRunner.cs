@@ -8,8 +8,6 @@ namespace ProcessKit;
 /// </summary>
 public sealed class ProcessRunner : IProcessRunner
 {
-	readonly ProcessRunOptions? _defaults;
-
 	/// <summary>Creates a runner with no baseline options (per-call options used as-is).</summary>
 	public ProcessRunner() { }
 
@@ -27,11 +25,11 @@ public sealed class ProcessRunner : IProcessRunner
 	public ProcessRunner(ProcessRunOptions defaults)
 	{
 		ArgumentNullException.ThrowIfNull(defaults);
-		_defaults = defaults;
+		Defaults = defaults;
 	}
 
 	// Baseline options, exposed so the bytes path (which bypasses Start) can apply them too.
-	internal ProcessRunOptions? Defaults => _defaults;
+	internal ProcessRunOptions? Defaults { get; }
 
 	/// <summary>
 	/// A shared, ready-to-use <see cref="IProcessRunner"/> instance for callers that don't use
@@ -47,6 +45,6 @@ public sealed class ProcessRunner : IProcessRunner
 	{
 		ArgumentNullException.ThrowIfNull(startInfo);
 
-		return new RunningProcess(startInfo, ProcessRunOptionsMerge.Merge(_defaults, options), cancellationToken);
+		return new RunningProcess(startInfo, ProcessRunOptionsMerge.Merge(Defaults, options), cancellationToken);
 	}
 }

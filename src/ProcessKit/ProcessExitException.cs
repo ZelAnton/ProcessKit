@@ -1,3 +1,5 @@
+using JetBrains.Annotations;
+
 namespace ProcessKit;
 
 /// <summary>
@@ -11,5 +13,6 @@ public sealed class ProcessExitException(int exitCode, string stdErr, string mes
 	public int ExitCode { get; } = exitCode;
 
 	/// <summary>The captured stderr (possibly truncated for the exception message).</summary>
+	[UsedImplicitly]
 	public string StdErr { get; } = stdErr;
 }

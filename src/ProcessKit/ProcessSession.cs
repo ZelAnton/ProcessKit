@@ -19,8 +19,6 @@ sealed class ProcessSession : IAsyncDisposable
 	readonly IStdOutSink _stdOutSink;
 	readonly IStdOutSink? _stdErrSink;
 	readonly ILineBuffer? _stderrBuffer;
-	readonly Task _stdoutPump;
-	readonly Task _stderrPump;
 	readonly Task _stdinTask;
 	readonly ProcessStandardInputWriter? _interactiveInput;
 	readonly TaskCompletionSource<int> _completionTcs;
@@ -80,7 +78,7 @@ sealed class ProcessSession : IAsyncDisposable
 			catch
 			{
 				// Counter unavailable (e.g. platform doesn't support it, or the process is gone);
-				// best effort — return null rather than throwing from a diagnostics getter.
+				// the best effort — return null rather than throwing from a diagnostics getter.
 				return null;
 			}
 		}
@@ -102,7 +100,7 @@ sealed class ProcessSession : IAsyncDisposable
 			catch
 			{
 				// Counter unavailable (e.g. platform doesn't support it, or the process is gone);
-				// best effort — return null rather than throwing from a diagnostics getter.
+				// the best effort — return null rather than throwing from a diagnostics getter.
 				return null;
 			}
 		}
@@ -118,11 +116,11 @@ sealed class ProcessSession : IAsyncDisposable
 	// captured bytes: Completion can resolve (on Process.Exited) before the OS pipe is fully drained,
 	// so the raw copy may still be in flight. The line path doesn't need it — draining the line
 	// channel already waits for the pump to complete the buffer.
-	public Task StdOutPumpCompletion => _stdoutPump;
+	public Task StdOutPumpCompletion { get; }
 
 	// Awaitable completion of the stderr pump — the bulk text/byte paths await this before reading a
 	// stderr sink's captured content (Completion can resolve before the pipe is fully drained).
-	public Task StdErrPumpCompletion => _stderrPump;
+	public Task StdErrPumpCompletion { get; }
 
 	// Writer for interactive stdin; non-null only when KeepStandardInputOpen was set. Surfaced via
 	// IRunningProcess.StandardInput.
@@ -136,7 +134,7 @@ sealed class ProcessSession : IAsyncDisposable
 		CancellationToken cancellationToken,
 		IStdOutSink? stdErrSink = null)
 	{
-		if (options?.KeepStandardInputOpen == true && options.StandardInput is not null and not StandardInput.EmptyInput)
+		if (options is { KeepStandardInputOpen: true, StandardInput: not null and not StandardInput.EmptyInput })
 			throw new ArgumentException(
 				"Set either StandardInput or KeepStandardInputOpen, not both. For interactive stdin, write all input (including any initial data) via IRunningProcess.StandardInput.",
 				nameof(options));
@@ -190,9 +188,9 @@ sealed class ProcessSession : IAsyncDisposable
 			if (_handle.HasExited)
 				OnProcessExited(this, EventArgs.Empty);
 
-			_stdoutPump = _stdOutSink.PumpAsync(_handle.StandardOutput, options?.StandardOutputHandler, _killCts.Token);
+			StdOutPumpCompletion = _stdOutSink.PumpAsync(_handle.StandardOutput, options?.StandardOutputHandler, _killCts.Token);
 
-			_stderrPump = _stdErrSink is not null
+			StdErrPumpCompletion = _stdErrSink is not null
 				? _stdErrSink.PumpAsync(_handle.StandardError, options?.StandardErrorHandler, _killCts.Token)
 				: PipePumpHelpers.PumpLinesAsync(
 					_handle.StandardError,
@@ -364,7 +362,7 @@ sealed class ProcessSession : IAsyncDisposable
 		// so the timeout surfaces as OperationCanceledException — caught by ObserveAsync along with the
 		// other expected teardown exceptions, keeping the semantics uniform.
 		using var teardownCts = new CancellationTokenSource(_pumpTeardownTimeout);
-		var pumpTask = Task.WhenAll(_stdoutPump, _stderrPump, _stdinTask);
+		var pumpTask = Task.WhenAll(StdOutPumpCompletion, StdErrPumpCompletion, _stdinTask);
 		await PipePumpHelpers.ObserveAsync(pumpTask.WaitAsync(teardownCts.Token)).ConfigureAwait(false);
 
 		_stdOutSink.Complete();

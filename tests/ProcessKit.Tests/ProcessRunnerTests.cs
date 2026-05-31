@@ -146,6 +146,13 @@ public class ProcessRunnerTests
 	public async Task StandardInput_FromLines_DeliversEachLine()
 	{
 		var runner = new ProcessRunner();
+		var options = new ProcessRunOptions { StandardInput = StandardInput.FromLines(Lines()) };
+		var result = await runner.GetFullOutputAsync(TestExe.EchoStdin(), options);
+
+		var lines = result.StdOut.Split((string[])["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries);
+		Assert.That(lines, Is.EqualTo((string[])["a", "b", "c"]));
+		return;
+
 		async IAsyncEnumerable<string> Lines()
 		{
 			yield return "a";
@@ -153,11 +160,6 @@ public class ProcessRunnerTests
 			yield return "b";
 			yield return "c";
 		}
-		var options = new ProcessRunOptions { StandardInput = StandardInput.FromLines(Lines()) };
-		var result = await runner.GetFullOutputAsync(TestExe.EchoStdin(), options);
-
-		var lines = result.StdOut.Split((string[])["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries);
-		Assert.That(lines, Is.EqualTo((string[])["a", "b", "c"]));
 	}
 
 	[Test]

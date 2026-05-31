@@ -15,7 +15,9 @@ static class ProcessRunOptionsMerge
 			// KeepStandardInputOpen is a per-call decision and must never be inherited from defaults
 			// (otherwise a runner default would silently re-enable interactive stdin — including
 			// through the bulk helpers, which would hang a stdin-reading child).
-			return defaults.KeepStandardInputOpen ? defaults with { KeepStandardInputOpen = false } : defaults;
+			return defaults.KeepStandardInputOpen
+				? defaults with { KeepStandardInputOpen = false }
+				: defaults;
 
 		return defaults with
 		{

@@ -32,10 +32,10 @@ sealed class LineChannelStdOutSink(OutputBufferPolicy? bufferPolicy) : IStdOutSi
 
 	public Task PumpAsync(StreamReader reader, Action<string>? handler, CancellationToken cancellationToken)
 		=> PipePumpHelpers.PumpLinesAsync(
-			reader,
-			_buffer,
-			handler,
-			() => Interlocked.Increment(ref _lineCount),
+			reader: reader,
+			buffer: _buffer,
+			handler: handler,
+			incrementCounter: () => Interlocked.Increment(ref _lineCount),
 			cancellationToken);
 
 	public void Complete() => _buffer.Complete();
@@ -43,7 +43,6 @@ sealed class LineChannelStdOutSink(OutputBufferPolicy? bufferPolicy) : IStdOutSi
 
 /// <summary>
 /// Raw-bytes sink: copies the undecoded base stream into a <see cref="MemoryStream"/>. Backs
-/// <c>GetBytesOutputAsync</c>'s stdout. Never goes through decoding, preserving exact bytes. The
 /// per-line handler does not apply to raw bytes and is ignored.
 /// </summary>
 sealed class ByteBufferStdOutSink : IStdOutSink, IDisposable
@@ -56,7 +55,10 @@ sealed class ByteBufferStdOutSink : IStdOutSink, IDisposable
 		{
 			await reader.BaseStream.CopyToAsync(_buffer, cancellationToken).ConfigureAwait(false);
 		}
-		catch (Exception e) when (e is OperationCanceledException or IOException or ObjectDisposedException)
+		catch (Exception e) when (e
+			is OperationCanceledException
+			or IOException
+			or ObjectDisposedException)
 		{
 			// Killed via the kill token (timeout or cancellation) — the pipe closed mid-copy, or the
 			// CTS was disposed because dispose raced ahead past the teardown timeout. Whatever bytes
@@ -83,9 +85,7 @@ sealed class ByteBufferStdOutSink : IStdOutSink, IDisposable
 /// </summary>
 sealed class TextBufferSink : IStdOutSink
 {
-	string _text = string.Empty;
-
-	public string Text => _text;
+	public string Text { get; private set; } = string.Empty;
 
 	public async Task PumpAsync(StreamReader reader, Action<string>? handler, CancellationToken cancellationToken)
 	{
@@ -93,20 +93,6 @@ sealed class TextBufferSink : IStdOutSink
 		var line = handler is null ? null : new StringBuilder();
 		var pendingCr = false;
 		var buffer = new char[4096];
-
-		void Emit()
-		{
-			var text = line!.ToString();
-			line.Clear();
-			try
-			{
-				handler!(text);
-			}
-			catch
-			{
-				// ignored - a user handler must not break the pump.
-			}
-		}
 
 		try
 		{
@@ -130,18 +116,18 @@ sealed class TextBufferSink : IStdOutSink
 							continue; // second half of a \r\n terminator; the line was emitted on the \r
 					}
 
-					if (c == '\r')
+					switch (c)
 					{
-						Emit();
-						pendingCr = true;
-					}
-					else if (c == '\n')
-					{
-						Emit();
-					}
-					else
-					{
-						line!.Append(c);
+						case '\r':
+							Emit();
+							pendingCr = true;
+							break;
+						case '\n':
+							Emit();
+							break;
+						default:
+							line!.Append(c);
+							break;
 					}
 				}
 			}
@@ -157,7 +143,22 @@ sealed class TextBufferSink : IStdOutSink
 			// partial trailing line as if it were complete.
 		}
 
-		_text = all.ToString();
+		Text = all.ToString();
+		return;
+
+		void Emit()
+		{
+			var text = line!.ToString();
+			line.Clear();
+			try
+			{
+				handler!(text);
+			}
+			catch
+			{
+				// ignored - a user handler must not break the pump.
+			}
+		}
 	}
 
 	public void Complete()

@@ -49,20 +49,17 @@ sealed class UnboundedLineBuffer : ILineBuffer
 /// drop-mode bounded channel returns synchronously and silently drops — it never blocks the pump,
 /// preserving the OS-pipe-drain guarantee.
 /// </summary>
-sealed class BoundedLineBuffer : ILineBuffer
+sealed class BoundedLineBuffer(int capacity, OutputOverflowMode overflow) : ILineBuffer
 {
-	readonly Channel<string> _channel;
-
-	public BoundedLineBuffer(int capacity, OutputOverflowMode overflow)
-		=> _channel = Channel.CreateBounded<string>(new BoundedChannelOptions(capacity)
-		{
-			SingleWriter = true,
-			SingleReader = true,
-			AllowSynchronousContinuations = false,
-			FullMode = overflow == OutputOverflowMode.DropNewest
-				? BoundedChannelFullMode.DropWrite
-				: BoundedChannelFullMode.DropOldest,
-		});
+	readonly Channel<string> _channel = Channel.CreateBounded<string>(new BoundedChannelOptions(capacity)
+	{
+		SingleWriter = true,
+		SingleReader = true,
+		AllowSynchronousContinuations = false,
+		FullMode = overflow == OutputOverflowMode.DropNewest
+			? BoundedChannelFullMode.DropWrite
+			: BoundedChannelFullMode.DropOldest,
+	});
 
 	public void Write(string line) => _channel.Writer.TryWrite(line);
 	public void Complete() => _channel.Writer.TryComplete();

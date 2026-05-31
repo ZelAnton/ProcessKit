@@ -32,7 +32,11 @@ sealed class BenchFakeHandle : IProcessHandle
 	public long PeakWorkingSet64 => 0;
 	public void Refresh() { }
 	public void Kill(bool entireProcessTree) => RaiseExited();
-	public Task WaitForExitAsync(CancellationToken cancellationToken) { RaiseExited(); return Task.CompletedTask; }
+	public Task WaitForExitAsync(CancellationToken cancellationToken)
+	{
+		RaiseExited();
+		return Task.CompletedTask;
+	}
 
 	internal void RaiseExited()
 	{
@@ -50,5 +54,6 @@ sealed class BenchFakeHandle : IProcessHandle
 
 sealed class BenchFakeHandleFactory(BenchFakeHandle handle) : IProcessHandleFactory
 {
-	public IProcessHandle Start(ProcessGroup group, ProcessStartInfo startInfo, CancellationToken killToken) => handle;
+	public IProcessHandle Start(ProcessGroup group, ProcessStartInfo startInfo, CancellationToken killToken)
+		=> handle;
 }

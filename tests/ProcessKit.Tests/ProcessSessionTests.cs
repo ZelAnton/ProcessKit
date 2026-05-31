@@ -117,13 +117,13 @@ public class ProcessSessionTests
 		var sink = new LineChannelStdOutSink(null);
 		await using var session = NewSession(handle, sink);
 
-		Assert.That(session.CpuTime, Is.Null);          // live read: counter throws → null
+		Assert.That(session.CpuTime, Is.Null); // live read: counter throws → null
 		Assert.That(session.PeakMemoryBytes, Is.Null);
 
 		handle.RaiseExited();
 		await session.Completion;
 
-		Assert.That(session.CpuTime, Is.Null);          // caching attempt also threw → still null
+		Assert.That(session.CpuTime, Is.Null); // caching attempt also threw → still null
 		Assert.That(session.PeakMemoryBytes, Is.Null);
 	}
 
@@ -201,8 +201,8 @@ public class ProcessSessionTests
 		await foreach (var line in sink.ReadAllAsync())
 			retained.Add(line);
 
-		Assert.That(sink.LineCount, Is.EqualTo(5));                          // every line counted off the pipe
-		Assert.That(retained, Is.EqualTo((string[])["l4", "l5"]));          // only the newest 2 retained
+		Assert.That(sink.LineCount, Is.EqualTo(5)); // every line counted off the pipe
+		Assert.That(retained, Is.EqualTo((string[])["l4", "l5"])); // only the newest 2 retained
 	}
 
 	[Test]
@@ -234,7 +234,9 @@ public class ProcessSessionTests
 	{
 		var handle = new FakeProcessHandle();
 		var sink = new LineChannelStdOutSink(null);
-		await using var session = NewSession(handle, sink, new ProcessRunOptions { KeepStandardInputOpen = true });
+		await using var session = NewSession(handle, sink, new ProcessRunOptions {
+			KeepStandardInputOpen = true,
+		});
 
 		await session.InteractiveInput!.CompleteAsync();
 

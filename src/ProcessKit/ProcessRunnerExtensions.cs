@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text;
+using JetBrains.Annotations;
 
 namespace ProcessKit;
 
@@ -30,7 +31,10 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return runner.Start(BuildStartInfo(executable, arguments), options, cancellationToken);
+			return runner.Start(
+				startInfo: BuildStartInfo(executable, arguments),
+				options,
+				cancellationToken);
 		}
 
 		public IAsyncEnumerable<string> GetOutputAsync(
@@ -40,7 +44,11 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetOutputAsyncCore(runner, startInfo, options, cancellationToken);
+			return GetOutputAsyncCore(
+				runner,
+				psi: startInfo,
+				options,
+				cancellationToken);
 		}
 
 		public IAsyncEnumerable<string> GetOutputAsync(
@@ -51,7 +59,11 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetOutputAsyncCore(runner, BuildStartInfo(executable, arguments), options, cancellationToken);
+			return GetOutputAsyncCore(
+				runner,
+				psi: BuildStartInfo(executable, arguments),
+				options,
+				cancellationToken);
 		}
 	}
 
@@ -84,7 +96,12 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetFirstLineOutputAsyncCore(runner, startInfo, predicate, options, cancellationToken);
+			return GetFirstLineOutputAsyncCore(
+				runner,
+				psi: startInfo,
+				predicate,
+				options,
+				cancellationToken);
 		}
 
 		public Task<string?> GetFirstLineOutputAsync(
@@ -96,7 +113,12 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetFirstLineOutputAsyncCore(runner, BuildStartInfo(executable, arguments), predicate, options, cancellationToken);
+			return GetFirstLineOutputAsyncCore(
+				runner,
+				psi: BuildStartInfo(executable, arguments),
+				predicate,
+				options,
+				cancellationToken);
 		}
 	}
 
@@ -138,7 +160,11 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetFullOutputAsyncCore(runner, BuildStartInfo(executable, arguments), options, cancellationToken);
+			return GetFullOutputAsyncCore(
+				runner,
+				psi: BuildStartInfo(executable, arguments),
+				options,
+				cancellationToken);
 		}
 	}
 
@@ -157,7 +183,13 @@ public static class ProcessRunnerExtensions
 
 		var stdoutSink = new TextBufferSink();
 		var stderrSink = new TextBufferSink();
-		await using var session = new ProcessSession(psi, options, stdoutSink, RealProcessHandleFactory.Instance, cancellationToken, stderrSink);
+		await using var session = new ProcessSession(
+			startInfo: psi,
+			options,
+			stdoutSink,
+			handleFactory: RealProcessHandleFactory.Instance,
+			cancellationToken,
+			stderrSink);
 
 		// Await both pumps before reading the captured text — Completion can resolve before the pipes
 		// are fully drained.
@@ -165,7 +197,13 @@ public static class ProcessRunnerExtensions
 		await session.StdErrPumpCompletion.ConfigureAwait(false);
 		var exit = await session.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-		return new ProcessResult<string>(stdoutSink.Text, stderrSink.Text, exit) { WasTimedOut = session.WasTimedOut };
+		return new ProcessResult<string>(
+			StdOut: stdoutSink.Text,
+			StdErr: stderrSink.Text,
+			ExitCode: exit)
+		{
+			WasTimedOut = session.WasTimedOut,
+		};
 	}
 
 	static async Task<ProcessResult<string>> ToResultAsyncCore(IRunningProcess p, CancellationToken cancellationToken)
@@ -180,7 +218,13 @@ public static class ProcessRunnerExtensions
 		// _completionTcs has been resolved — so the subsequent await returns immediately.
 		await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
 		var exit = await p.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
-		return new ProcessResult<string>(stdoutTask.Result, stderrTask.Result, exit) { WasTimedOut = p.WasTimedOut };
+		return new ProcessResult<string>(
+			StdOut: stdoutTask.Result,
+			StdErr: stderrTask.Result,
+			ExitCode: exit)
+		{
+			WasTimedOut = p.WasTimedOut,
+		};
 	}
 
 	static async Task<string> AccumulateLinesAsync(IAsyncEnumerable<string> lines, CancellationToken cancellationToken)
@@ -209,7 +253,11 @@ public static class ProcessRunnerExtensions
 			ArgumentNullException.ThrowIfNull(runner);
 			ArgumentNullException.ThrowIfNull(startInfo);
 
-			return GetBytesOutputAsyncCore(runner, startInfo, options, cancellationToken);
+			return GetBytesOutputAsyncCore(
+				runner,
+				source: startInfo,
+				options,
+				cancellationToken);
 		}
 
 		public Task<ProcessResult<byte[]>> GetBytesOutputAsync(
@@ -220,7 +268,11 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetBytesOutputAsyncCore(runner, BuildStartInfo(executable, arguments), options, cancellationToken);
+			return GetBytesOutputAsyncCore(
+				runner,
+				source: BuildStartInfo(executable, arguments),
+				options,
+				cancellationToken);
 		}
 	}
 
@@ -239,7 +291,13 @@ public static class ProcessRunnerExtensions
 		// Raw bytes for stdout; faithful decoded text for stderr (preserving its exact line endings).
 		var stdoutSink = new ByteBufferStdOutSink();
 		var stderrSink = new TextBufferSink();
-		await using var session = new ProcessSession(source, CloseStdinForBulk(options), stdoutSink, RealProcessHandleFactory.Instance, cancellationToken, stderrSink);
+		await using var session = new ProcessSession(
+			startInfo: source,
+			options: CloseStdinForBulk(options),
+			stdOutSink: stdoutSink,
+			handleFactory: RealProcessHandleFactory.Instance,
+			cancellationToken: cancellationToken,
+			stdErrSink: stderrSink);
 
 		// Await both pumps before reading the captured output — Completion can resolve before the
 		// pipes are fully drained.
@@ -247,7 +305,13 @@ public static class ProcessRunnerExtensions
 		await session.StdErrPumpCompletion.ConfigureAwait(false);
 		var exit = await session.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-		return new ProcessResult<byte[]>(stdoutSink.ToArray(), stderrSink.Text, exit) { WasTimedOut = session.WasTimedOut };
+		return new ProcessResult<byte[]>(
+			StdOut: stdoutSink.ToArray(),
+			StdErr: stderrSink.Text,
+			ExitCode: exit)
+		{
+			WasTimedOut = session.WasTimedOut,
+		};
 	}
 
 	// ──────────────────────────────────────────────────────────────────────────────────────
@@ -327,6 +391,7 @@ public static class ProcessRunnerExtensions
 			CancellationToken cancellationToken = default)
 			=> runner.GetFullOutputAsync(executable, arguments, options, cancellationToken).GetAwaiter().GetResult().StdOut;
 
+		[UsedImplicitly]
 		public string? GetFirstLineOutput(
 			string executable,
 			IEnumerable<string> arguments,
@@ -387,9 +452,9 @@ public static class ProcessRunnerExtensions
 			ArgumentNullException.ThrowIfNull(process);
 
 			var code = await process.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
-			if (process.WasTimedOut)
-				throw new TimeoutException("The process was killed because its configured timeout elapsed.");
-			return code;
+			return !process.WasTimedOut
+				? code
+				: throw new TimeoutException("The process was killed because its configured timeout elapsed.");
 		}
 	}
 

@@ -23,16 +23,14 @@ public sealed record OutputBufferPolicy
 	/// <exception cref="ArgumentOutOfRangeException">Set to a negative value.</exception>
 	public int? MaxBufferedLines
 	{
-		get => _maxBufferedLines;
+		get;
 		init
 		{
 			if (value is < 0)
 				throw new ArgumentOutOfRangeException(nameof(value), value, "MaxBufferedLines must be null, zero, or positive.");
-			_maxBufferedLines = value;
+			field = value;
 		}
 	}
-
-	readonly int? _maxBufferedLines;
 
 	/// <summary>What to do when <see cref="MaxBufferedLines"/> is reached. Defaults to <see cref="OutputOverflowMode.DropOldest"/>.</summary>
 	public OutputOverflowMode Overflow { get; init; } = OutputOverflowMode.DropOldest;

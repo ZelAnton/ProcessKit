@@ -10,22 +10,30 @@ public class ProcessRunOptionsMergeTests
 	[Test]
 	public void NullDefaults_ReturnsPerCallInstance()
 	{
-		var perCall = new ProcessRunOptions { Timeout = TimeSpan.FromSeconds(3) };
+		var perCall = new ProcessRunOptions {
+			Timeout = TimeSpan.FromSeconds(3),
+		};
 		Assert.That(ProcessRunOptionsMerge.Merge(null, perCall), Is.SameAs(perCall));
 	}
 
 	[Test]
 	public void NullPerCall_ReturnsDefaultsInstance()
 	{
-		var defaults = new ProcessRunOptions { Timeout = TimeSpan.FromSeconds(3) };
+		var defaults = new ProcessRunOptions {
+			Timeout = TimeSpan.FromSeconds(3),
+		};
 		Assert.That(ProcessRunOptionsMerge.Merge(defaults, null), Is.SameAs(defaults));
 	}
 
 	[Test]
 	public void PerCallScalar_OverridesDefault()
 	{
-		var defaults = new ProcessRunOptions { Timeout = TimeSpan.FromSeconds(1) };
-		var perCall = new ProcessRunOptions { Timeout = TimeSpan.FromSeconds(9) };
+		var defaults = new ProcessRunOptions {
+			Timeout = TimeSpan.FromSeconds(1),
+		};
+		var perCall = new ProcessRunOptions {
+			Timeout = TimeSpan.FromSeconds(9),
+		};
 
 		var merged = ProcessRunOptionsMerge.Merge(defaults, perCall);
 
@@ -35,8 +43,13 @@ public class ProcessRunOptionsMergeTests
 	[Test]
 	public void DefaultScalar_AppliesWhenPerCallUnset()
 	{
-		var defaults = new ProcessRunOptions { Timeout = TimeSpan.FromSeconds(7), StdOutEncoding = Encoding.ASCII };
-		var perCall = new ProcessRunOptions { StandardErrorHandler = _ => { } };
+		var defaults = new ProcessRunOptions {
+			Timeout = TimeSpan.FromSeconds(7),
+			StdOutEncoding = Encoding.ASCII,
+		};
+		var perCall = new ProcessRunOptions {
+			StandardErrorHandler = _ => { },
+		};
 
 		var merged = ProcessRunOptionsMerge.Merge(defaults, perCall);
 
@@ -50,11 +63,17 @@ public class ProcessRunOptionsMergeTests
 	{
 		var defaults = new ProcessRunOptions
 		{
-			Environment = new Dictionary<string, string?> { ["A"] = "1", ["B"] = "2" },
+			Environment = new Dictionary<string, string?> {
+				["A"] = "1",
+				["B"] = "2",
+			},
 		};
 		var perCall = new ProcessRunOptions
 		{
-			Environment = new Dictionary<string, string?> { ["B"] = "override", ["C"] = "3" },
+			Environment = new Dictionary<string, string?> {
+				["B"] = "override",
+				["C"] = "3",
+			},
 		};
 
 		var merged = ProcessRunOptionsMerge.Merge(defaults, perCall);
@@ -67,8 +86,14 @@ public class ProcessRunOptionsMergeTests
 	[Test]
 	public void Environment_PerCallNullValue_IsPreserved_AsRemoval()
 	{
-		var defaults = new ProcessRunOptions { Environment = new Dictionary<string, string?> { ["X"] = "keep" } };
-		var perCall = new ProcessRunOptions { Environment = new Dictionary<string, string?> { ["X"] = null } };
+		var defaults = new ProcessRunOptions {
+			Environment = new Dictionary<string, string?> {
+				["X"] = "keep",
+			},
+		};
+		var perCall = new ProcessRunOptions {
+			Environment = new Dictionary<string, string?> { ["X"] = null },
+		};
 
 		var merged = ProcessRunOptionsMerge.Merge(defaults, perCall);
 
@@ -79,8 +104,12 @@ public class ProcessRunOptionsMergeTests
 	[Test]
 	public void KeepStandardInputOpen_IsPerCallOnly_NotInheritedFromDefaults()
 	{
-		var defaults = new ProcessRunOptions { KeepStandardInputOpen = true };
-		var perCall = new ProcessRunOptions { Timeout = TimeSpan.FromSeconds(1) };
+		var defaults = new ProcessRunOptions {
+			KeepStandardInputOpen = true,
+		};
+		var perCall = new ProcessRunOptions {
+			Timeout = TimeSpan.FromSeconds(1),
+		};
 
 		var merged = ProcessRunOptionsMerge.Merge(defaults, perCall);
 
@@ -92,7 +121,10 @@ public class ProcessRunOptionsMergeTests
 	{
 		// The perCall==null fast path must still clear KeepStandardInputOpen, or a runner default
 		// would re-enable interactive stdin (and hang the bulk helpers).
-		var defaults = new ProcessRunOptions { KeepStandardInputOpen = true, Timeout = TimeSpan.FromSeconds(1) };
+		var defaults = new ProcessRunOptions {
+			KeepStandardInputOpen = true,
+			Timeout = TimeSpan.FromSeconds(1),
+		};
 
 		var merged = ProcessRunOptionsMerge.Merge(defaults, null);
 
@@ -105,8 +137,12 @@ public class ProcessRunOptionsMergeTests
 	{
 		Action<string> d = _ => { };
 		Action<string> p = _ => { };
-		var defaults = new ProcessRunOptions { StandardOutputHandler = d };
-		var perCall = new ProcessRunOptions { StandardOutputHandler = p };
+		var defaults = new ProcessRunOptions {
+			StandardOutputHandler = d,
+		};
+		var perCall = new ProcessRunOptions {
+			StandardOutputHandler = p,
+		};
 
 		var merged = ProcessRunOptionsMerge.Merge(defaults, perCall);
 
@@ -116,8 +152,18 @@ public class ProcessRunOptionsMergeTests
 	[Test]
 	public void Merge_DoesNotMutateInputs()
 	{
-		var defaults = new ProcessRunOptions { Timeout = TimeSpan.FromSeconds(1), Environment = new Dictionary<string, string?> { ["A"] = "1" } };
-		var perCall = new ProcessRunOptions { Timeout = TimeSpan.FromSeconds(2), Environment = new Dictionary<string, string?> { ["B"] = "2" } };
+		var defaults = new ProcessRunOptions {
+			Timeout = TimeSpan.FromSeconds(1),
+			Environment = new Dictionary<string, string?> {
+				["A"] = "1",
+			},
+		};
+		var perCall = new ProcessRunOptions {
+			Timeout = TimeSpan.FromSeconds(2),
+			Environment = new Dictionary<string, string?> {
+				["B"] = "2",
+			},
+		};
 
 		ProcessRunOptionsMerge.Merge(defaults, perCall);
 

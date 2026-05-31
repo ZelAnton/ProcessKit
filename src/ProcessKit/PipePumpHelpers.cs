@@ -53,17 +53,16 @@ static class PipePumpHelpers
 		if (options?.WorkingDirectory is { } workingDirectory)
 			psi.WorkingDirectory = workingDirectory;
 
-		if (options?.Environment is { } environment)
-		{
-			foreach (var (key, value) in environment)
-			{
-				if (value is null)
-					psi.Environment.Remove(key);
-				else
-					psi.Environment[key] = value;
-			}
-		}
+		if (options?.Environment is not { } environment)
+			return psi;
 
+		foreach (var (key, value) in environment)
+		{
+			if (value is null)
+				psi.Environment.Remove(key);
+			else
+				psi.Environment[key] = value;
+		}
 		return psi;
 	}
 
