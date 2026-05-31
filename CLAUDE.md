@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+[AGENTS.md](AGENTS.md) is the canonical source for the engineering rules (architecture invariants, ProcessRunner conventions, thread-safety contracts, release/changelog policy). This file summarises the same ground plus the day-to-day commands; when the two ever disagree, AGENTS.md wins.
+
+## Formatting
+
+- **Tabs for indentation, never spaces** — applies to every file type (`.cs`, `.csproj`, `.props`, `.targets`, `.slnx`, `.md`, …), per `.editorconfig`.
+- **LF line endings** unless a file-specific rule says otherwise.
+- File-scoped namespaces; nullable + implicit usings enabled; `TreatWarningsAsErrors=true` (the build is warning-clean — keep it so).
+
 ## Commands
 
 ```bash
