@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -
 
 ### Fixed
+-
+
+## [1.3.2] - 2026-05-31
+
+### Added
+-
+
+### Changed
+-
+
+### Fixed
 - `GetFullOutputAsync` now captures stdout/stderr faithfully — exact line endings and any trailing newline are preserved instead of being normalized to the host newline and truncated. `GetBytesOutputAsync`'s captured `StdErr` is likewise faithful. (`ToResultAsync`, which reads the line-oriented handle, remains line-normalized — its XML doc now says so and points to the faithful helpers.)
 
 ## [1.3.1] - 2026-05-31
@@ -98,7 +109,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rename package to `ProcessKit`, namespace to `ProcessKit`; publish to NuGet.org under MIT licence
 
-[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.2...HEAD
+[1.3.2]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.1.1...v1.2.0
