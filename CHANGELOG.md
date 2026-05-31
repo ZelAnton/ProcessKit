@@ -14,7 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -
 
 ### Fixed
--
+- Standard input is now always closed at start when no `StandardInput` is supplied, matching the documented contract. Previously the child inherited the parent's stdin, so a process that reads stdin (e.g. `cat`) could block forever when run with no input.
+- The defensive `ProcessStartInfo` clone now mirrors the caller's environment exactly. Previously an environment variable removed from `ProcessStartInfo.Environment` could reappear in the started process, because the clone was seeded with the current process environment and never cleared.
+- A user-supplied stdin source (`FromStream`/`FromLines`/`FromEnumerable`) that throws no longer lets the exception escape from `IRunningProcess.DisposeAsync`; the failure is contained and the child receives whatever was written before it, then EOF.
+- `IRunningProcess.CpuTime` and `PeakMemoryBytes` now refresh the underlying counters before sampling, so repeated live reads report current values instead of a stale first-read snapshot.
 
 ## [1.2.0] - 2026-05-19
 

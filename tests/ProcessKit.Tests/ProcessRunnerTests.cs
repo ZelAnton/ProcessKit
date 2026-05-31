@@ -161,6 +161,19 @@ public class ProcessRunnerTests
 	}
 
 	[Test]
+	public async Task NoStandardInput_ClosesStdin_DoesNotHang()
+	{
+		var runner = new ProcessRunner();
+		// EchoStdin echoes whatever it reads from stdin. With no StandardInput supplied the runner
+		// must close stdin so the child sees EOF and exits; otherwise it would block forever and the
+		// cancellation token below would fire, failing the test instead of hanging the suite.
+		using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+		var result = await runner.GetFullOutputAsync(TestExe.EchoStdin(), cancellationToken: cts.Token);
+
+		Assert.That(result.StdOut.Trim(), Is.Empty);
+	}
+
+	[Test]
 	public async Task GetBytesOutputAsync_ReturnsRawBytes()
 	{
 		var runner = new ProcessRunner();

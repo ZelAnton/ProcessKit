@@ -104,7 +104,9 @@ sealed class WindowsJobObject : IProcessGroupImpl
 		}
 		catch
 		{
-			// ignored
+			// Best-effort cleanup after AssignProcessToJobObject failed. Kill throws
+			// InvalidOperationException if the process already exited or Win32Exception if the OS
+			// refuses — we still dispose below and rethrow the original assignment failure regardless.
 		}
 
 		process.Dispose();

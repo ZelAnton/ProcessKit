@@ -78,7 +78,9 @@ public sealed class ProcessGroup : IDisposable, IAsyncDisposable
 			}
 			catch
 			{
-				// ignored
+				// Best-effort kill on cancellation. Kill throws InvalidOperationException when the
+				// process already exited (the common case — the cancellation just lost the race) and
+				// Win32Exception if the OS refuses; either way there is nothing left to terminate.
 			}
 		}, process);
 

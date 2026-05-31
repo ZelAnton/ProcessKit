@@ -10,8 +10,6 @@ static class PipePumpHelpers
 	{
 		ArgumentNullException.ThrowIfNull(source);
 
-		var needsStdin = options?.StandardInput is not null and not StandardInput.EmptyInput;
-
 		var psi = new ProcessStartInfo
 		{
 			FileName = source.FileName,
@@ -23,7 +21,11 @@ static class PipePumpHelpers
 			UseShellExecute = false,
 			RedirectStandardOutput = true,
 			RedirectStandardError = true,
-			RedirectStandardInput = needsStdin,
+			// Always redirect stdin so the runner controls it. When no input is supplied the runner
+			// closes it immediately (see WriteStandardInputAsync), giving the child an empty stdin
+			// that EOFs at once — the documented "stdin closed at start" contract. Without this the
+			// child would inherit the parent's stdin and a stdin-reading process could hang forever.
+			RedirectStandardInput = true,
 			StandardOutputEncoding = options?.StdOutEncoding ?? source.StandardOutputEncoding ?? Encoding.UTF8,
 			StandardErrorEncoding = options?.StdErrEncoding ?? source.StandardErrorEncoding ?? Encoding.UTF8,
 		};
@@ -38,8 +40,12 @@ static class PipePumpHelpers
 		foreach (var arg in source.ArgumentList)
 			psi.ArgumentList.Add(arg);
 
-		foreach (var key in source.Environment.Keys)
-			psi.Environment[key] = source.Environment[key];
+		// A fresh ProcessStartInfo.Environment is pre-seeded with the current process environment.
+		// Clear it first so the clone mirrors the caller's view exactly — otherwise a variable the
+		// caller *removed* from source.Environment would silently reappear in the started process.
+		psi.Environment.Clear();
+		foreach (var entry in source.Environment)
+			psi.Environment[entry.Key] = entry.Value;
 
 		return psi;
 	}
@@ -149,14 +155,16 @@ static class PipePumpHelpers
 		StandardInput? input,
 		CancellationToken cancellationToken)
 	{
-		if (input is null or StandardInput.EmptyInput)
-			return;
-
 		var stdin = process.StandardInput.BaseStream;
 		try
 		{
 			switch (input)
 			{
+				case null:
+				case StandardInput.EmptyInput:
+					// No input — fall through to the finally, which closes stdin so the child sees
+					// EOF immediately. stdin is always redirected (see PrepareStartInfo).
+					break;
 				case StandardInput.StringInput s:
 				{
 					var bytes = s.Encoding.GetBytes(s.Text);
@@ -229,6 +237,13 @@ static class PipePumpHelpers
 		catch (ObjectDisposedException)
 		{
 			// CTS disposed mid-write while the runner is being torn down; safe to ignore.
+		}
+		catch (Exception)
+		{
+			// A user-supplied stdin source (FromStream / FromLines / FromEnumerable) threw an
+			// unexpected exception. Feeding stdin is best-effort: a faulty source must not fault this
+			// task and let the exception escape handle teardown (DisposeAsync awaits the stdin task).
+			// The child receives whatever was written before the failure, then EOF when stdin closes.
 		}
 		finally
 		{

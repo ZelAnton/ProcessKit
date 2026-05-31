@@ -106,6 +106,8 @@ sealed class UnixProcessGroup : IProcessGroupImpl
 			}
 			catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
 			{
+				// The process exited (or was disposed by another thread) between the HasExited check
+				// and reading its counters — a normal shutdown race. Skip it; it contributes nothing.
 			}
 		}
 
@@ -137,6 +139,8 @@ sealed class UnixProcessGroup : IProcessGroupImpl
 			}
 			catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
 			{
+				// Process exited or was disposed concurrently during teardown — already gone, which
+				// is exactly the goal here; nothing left to wait for or kill.
 			}
 		}
 	}
@@ -180,6 +184,8 @@ sealed class UnixProcessGroup : IProcessGroupImpl
 			}
 			catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
 			{
+				// Process exited or was disposed concurrently during teardown — already gone, which
+				// is exactly the goal here; nothing left to wait for or kill.
 			}
 		}
 	}

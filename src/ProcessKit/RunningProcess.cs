@@ -69,6 +69,9 @@ sealed class RunningProcess : IRunningProcess
 				return TimeSpan.FromTicks(cached);
 			try
 			{
+				// Refresh first — Process caches its counters, so without this repeated reads return
+				// the same stale snapshot rather than a live sample.
+				_process.Refresh();
 				return _process.TotalProcessorTime;
 			}
 			catch
@@ -89,6 +92,8 @@ sealed class RunningProcess : IRunningProcess
 				return cached;
 			try
 			{
+				// Refresh first — see CpuTime; Process caches PeakWorkingSet64 between reads.
+				_process.Refresh();
 				return _process.PeakWorkingSet64;
 			}
 			catch
@@ -243,7 +248,16 @@ sealed class RunningProcess : IRunningProcess
 		Interlocked.Exchange(ref _durationTicks, _stopwatch.ElapsedTicks);
 
 		// Cache final stats now while the Process wrapper is still alive — keeps these
-		// observable even after _process.Dispose() runs in DisposeAsync.
+		// observable even after _process.Dispose() runs in DisposeAsync. Refresh first so the
+		// cached values reflect the final state, not a stale snapshot from an earlier live read.
+		try
+		{
+			_process.Refresh();
+		}
+		catch
+		{
+			// counters unavailable — the reads below fall back to their own sentinels
+		}
 		try
 		{
 			Interlocked.Exchange(ref _finalCpuTimeTicks, _process.TotalProcessorTime.Ticks);
