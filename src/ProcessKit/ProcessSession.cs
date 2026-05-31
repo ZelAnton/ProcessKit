@@ -5,9 +5,10 @@ namespace ProcessKit;
 
 /// <summary>
 /// The single owner of a started process's lifecycle: group ownership, kill/timeout cancellation,
-/// exit handling, diagnostics caching, and pump orchestration. Stdout transport is delegated to an
-/// injected <see cref="IStdOutSink"/> (line channel vs byte buffer); stderr is always line-oriented
-/// and owned here. Both <see cref="RunningProcess"/> (line handle) and the bytes capture path build
+/// exit handling, diagnostics caching, and pump orchestration. Each stream's transport is delegated
+/// to an injected <see cref="IStdOutSink"/> (line channel / raw bytes / faithful text). stdout always
+/// has a sink; stderr defaults to a line buffer (exposed via <see cref="StdErr"/>) unless a stderr
+/// sink is supplied. Both <see cref="RunningProcess"/> (line handle) and the bulk capture paths build
 /// on this, so the lifecycle exists in exactly one place.
 /// </summary>
 sealed class ProcessSession : IAsyncDisposable
@@ -16,7 +17,8 @@ sealed class ProcessSession : IAsyncDisposable
 	readonly ProcessGroup _group;
 	readonly bool _ownsGroup;
 	readonly IStdOutSink _stdOutSink;
-	readonly ILineBuffer _stderrBuffer;
+	readonly IStdOutSink? _stdErrSink;
+	readonly ILineBuffer? _stderrBuffer;
 	readonly Task _stdoutPump;
 	readonly Task _stderrPump;
 	readonly Task _stdinTask;
@@ -39,7 +41,8 @@ sealed class ProcessSession : IAsyncDisposable
 	long _finalCpuTimeTicks = -1L;
 	long _finalPeakMemory = -1L;
 
-	public IAsyncEnumerable<string> StdErr => _stderrBuffer.ReadAllAsync();
+	// Valid only in line mode (no stderr sink supplied) — i.e. for the streaming RunningProcess handle.
+	public IAsyncEnumerable<string> StdErr => _stderrBuffer!.ReadAllAsync();
 
 	public int StdErrLineCount => Volatile.Read(ref _stderrLineCount);
 
@@ -117,6 +120,10 @@ sealed class ProcessSession : IAsyncDisposable
 	// channel already waits for the pump to complete the buffer.
 	public Task StdOutPumpCompletion => _stdoutPump;
 
+	// Awaitable completion of the stderr pump — the bulk text/byte paths await this before reading a
+	// stderr sink's captured content (Completion can resolve before the pipe is fully drained).
+	public Task StdErrPumpCompletion => _stderrPump;
+
 	// Writer for interactive stdin; non-null only when KeepStandardInputOpen was set. Surfaced via
 	// IRunningProcess.StandardInput.
 	public IProcessStandardInput? InteractiveInput => _interactiveInput;
@@ -126,7 +133,8 @@ sealed class ProcessSession : IAsyncDisposable
 		ProcessRunOptions? options,
 		IStdOutSink stdOutSink,
 		IProcessHandleFactory handleFactory,
-		CancellationToken cancellationToken)
+		CancellationToken cancellationToken,
+		IStdOutSink? stdErrSink = null)
 	{
 		if (options?.KeepStandardInputOpen == true && options.StandardInput is not null and not StandardInput.EmptyInput)
 			throw new ArgumentException(
@@ -136,9 +144,11 @@ sealed class ProcessSession : IAsyncDisposable
 		var psi = PipePumpHelpers.PrepareStartInfo(startInfo, options);
 
 		_stdOutSink = stdOutSink;
+		_stdErrSink = stdErrSink;
 		_ownsGroup = options?.ProcessGroup is null;
 		_group = options?.ProcessGroup ?? new ProcessGroup(options?.ProcessGroupOptions ?? ProcessGroupOptions.Default);
-		_stderrBuffer = ILineBuffer.Create(options?.OutputBuffer);
+		// Line mode (no stderr sink): own a line buffer exposed via StdErr. Sink mode: the sink owns capture.
+		_stderrBuffer = stdErrSink is null ? ILineBuffer.Create(options?.OutputBuffer) : null;
 		_pumpTeardownTimeout = options?.PumpTeardownTimeout ?? TimeSpan.FromSeconds(5);
 
 		_killCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -180,14 +190,16 @@ sealed class ProcessSession : IAsyncDisposable
 			if (_handle.HasExited)
 				OnProcessExited(this, EventArgs.Empty);
 
-			_stdoutPump = _stdOutSink.PumpAsync(_handle, options, _killCts.Token);
+			_stdoutPump = _stdOutSink.PumpAsync(_handle.StandardOutput, options?.StandardOutputHandler, _killCts.Token);
 
-			_stderrPump = PipePumpHelpers.PumpLinesAsync(
-				_handle.StandardError,
-				_stderrBuffer,
-				options?.StandardErrorHandler,
-				() => Interlocked.Increment(ref _stderrLineCount),
-				_killCts.Token);
+			_stderrPump = _stdErrSink is not null
+				? _stdErrSink.PumpAsync(_handle.StandardError, options?.StandardErrorHandler, _killCts.Token)
+				: PipePumpHelpers.PumpLinesAsync(
+					_handle.StandardError,
+					_stderrBuffer!,
+					options?.StandardErrorHandler,
+					() => Interlocked.Increment(ref _stderrLineCount),
+					_killCts.Token);
 
 			if (options?.KeepStandardInputOpen == true)
 			{
@@ -234,7 +246,9 @@ sealed class ProcessSession : IAsyncDisposable
 			// completion and tears down quickly instead of looping until the OS pipe is gone.
 			_stdOutSink.Complete();
 			(_stdOutSink as IDisposable)?.Dispose();
-			_stderrBuffer.Complete();
+			_stdErrSink?.Complete();
+			(_stdErrSink as IDisposable)?.Dispose();
+			_stderrBuffer?.Complete();
 
 			if (_ownsGroup)
 				_group.Dispose();
@@ -354,7 +368,8 @@ sealed class ProcessSession : IAsyncDisposable
 		await PipePumpHelpers.ObserveAsync(pumpTask.WaitAsync(teardownCts.Token)).ConfigureAwait(false);
 
 		_stdOutSink.Complete();
-		_stderrBuffer.Complete();
+		_stdErrSink?.Complete();
+		_stderrBuffer?.Complete();
 
 		try
 		{
@@ -381,6 +396,7 @@ sealed class ProcessSession : IAsyncDisposable
 		}
 
 		(_stdOutSink as IDisposable)?.Dispose();
+		(_stdErrSink as IDisposable)?.Dispose();
 		_interactiveInput?.Dispose();
 
 		// Same ordering as the constructor catch — see explanation there.

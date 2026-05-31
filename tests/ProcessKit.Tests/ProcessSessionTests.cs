@@ -34,6 +34,26 @@ public class ProcessSessionTests
 	}
 
 	[Test]
+	public async Task TextBufferSink_CapturesFaithfulText_AndTeesPerLine()
+	{
+		// Mixed CRLF + LF + no trailing newline: faithful text preserves it verbatim, while the
+		// handler sees terminator-free lines (ReadLine semantics: \r\n and \n are each one terminator,
+		// the unterminated final segment is a line).
+		var handle = new FakeProcessHandle(stdout: "a\r\nb\nc"u8.ToArray());
+		var captured = new List<string>();
+		var sink = new TextBufferSink();
+		var options = new ProcessRunOptions { StandardOutputHandler = captured.Add };
+		await using var session = NewSession(handle, sink, options);
+
+		await session.StdOutPumpCompletion;
+		handle.RaiseExited();
+		await session.Completion;
+
+		Assert.That(sink.Text, Is.EqualTo("a\r\nb\nc"));
+		Assert.That(captured, Is.EqualTo((string[])["a", "b", "c"]));
+	}
+
+	[Test]
 	public async Task ByteSink_CapturesRawBytes()
 	{
 		var payload = new byte[] { 0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd };

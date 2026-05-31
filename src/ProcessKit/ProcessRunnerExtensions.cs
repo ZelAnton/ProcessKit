@@ -148,8 +148,24 @@ public static class ProcessRunnerExtensions
 		ProcessRunOptions? options,
 		CancellationToken cancellationToken)
 	{
-		await using var p = runner.Start(psi, CloseStdinForBulk(options), cancellationToken);
-		return await ToResultAsyncCore(p, cancellationToken).ConfigureAwait(false);
+		// Faithful capture: decode the exact stdout/stderr text (preserving line endings and any
+		// trailing newline) via TextBufferSinks, instead of reconstructing from the line channel.
+		// Bypasses runner.Start (which yields the line-oriented handle), so apply runner defaults here.
+		if (runner is ProcessRunner concrete)
+			options = ProcessRunOptionsMerge.Merge(concrete.Defaults, options);
+		options = CloseStdinForBulk(options);
+
+		var stdoutSink = new TextBufferSink();
+		var stderrSink = new TextBufferSink();
+		await using var session = new ProcessSession(psi, options, stdoutSink, RealProcessHandleFactory.Instance, cancellationToken, stderrSink);
+
+		// Await both pumps before reading the captured text — Completion can resolve before the pipes
+		// are fully drained.
+		await session.StdOutPumpCompletion.ConfigureAwait(false);
+		await session.StdErrPumpCompletion.ConfigureAwait(false);
+		var exit = await session.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+		return new ProcessResult<string>(stdoutSink.Text, stderrSink.Text, exit) { WasTimedOut = session.WasTimedOut };
 	}
 
 	static async Task<ProcessResult<string>> ToResultAsyncCore(IRunningProcess p, CancellationToken cancellationToken)
@@ -220,18 +236,18 @@ public static class ProcessRunnerExtensions
 		if (runner is ProcessRunner concrete)
 			options = ProcessRunOptionsMerge.Merge(concrete.Defaults, options);
 
-		// Bytes path runs on the same ProcessSession lifecycle as the line handle, but with a raw
-		// byte sink for stdout instead of the line channel. The session disposes the sink.
-		var sink = new ByteBufferStdOutSink();
-		await using var session = new ProcessSession(source, CloseStdinForBulk(options), sink, RealProcessHandleFactory.Instance, cancellationToken);
+		// Raw bytes for stdout; faithful decoded text for stderr (preserving its exact line endings).
+		var stdoutSink = new ByteBufferStdOutSink();
+		var stderrSink = new TextBufferSink();
+		await using var session = new ProcessSession(source, CloseStdinForBulk(options), stdoutSink, RealProcessHandleFactory.Instance, cancellationToken, stderrSink);
 
-		// Await the raw stdout copy before reading the buffer — Completion can resolve before the
-		// pipe is fully drained. stderr is always line-oriented; accumulate it into a string.
+		// Await both pumps before reading the captured output — Completion can resolve before the
+		// pipes are fully drained.
 		await session.StdOutPumpCompletion.ConfigureAwait(false);
-		var stderr = await AccumulateLinesAsync(session.StdErr, cancellationToken).ConfigureAwait(false);
+		await session.StdErrPumpCompletion.ConfigureAwait(false);
 		var exit = await session.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-		return new ProcessResult<byte[]>(sink.ToArray(), stderr, exit) { WasTimedOut = session.WasTimedOut };
+		return new ProcessResult<byte[]>(stdoutSink.ToArray(), stderrSink.Text, exit) { WasTimedOut = session.WasTimedOut };
 	}
 
 	// ──────────────────────────────────────────────────────────────────────────────────────
@@ -343,11 +359,16 @@ public static class ProcessRunnerExtensions
 	extension(IRunningProcess process)
 	{
 		/// <summary>
-		/// Drains stdout and stderr to completion and returns the captured result — the same work
-		/// <see cref="GetFullOutputAsync(IProcessRunner, ProcessStartInfo, ProcessRunOptions?, CancellationToken)"/>
-		/// does, but from an already-started handle. Does <strong>not</strong> dispose the handle;
-		/// the caller still owns it.
+		/// Drains stdout and stderr from an already-started handle and returns the captured result.
+		/// Does <strong>not</strong> dispose the handle; the caller still owns it.
 		/// </summary>
+		/// <remarks>
+		/// Because it consumes the handle's line-oriented streams, the captured text is reconstructed
+		/// from lines: line endings are normalized to <see cref="System.Environment.NewLine"/> and the
+		/// trailing newline is dropped. For byte-exact / formatting-preserving capture, use
+		/// <see cref="GetFullOutputAsync(IProcessRunner, ProcessStartInfo, ProcessRunOptions?, CancellationToken)"/>
+		/// (faithful) or <see cref="GetBytesOutputAsync(IProcessRunner, ProcessStartInfo, ProcessRunOptions?, CancellationToken)"/>.
+		/// </remarks>
 		public Task<ProcessResult<string>> ToResultAsync(CancellationToken cancellationToken = default)
 		{
 			ArgumentNullException.ThrowIfNull(process);

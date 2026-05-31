@@ -187,13 +187,63 @@ public class ProcessRunnerTests
 	[Test]
 	public async Task GetBytesOutputAsync_CapturesStdErr()
 	{
-		// Guards the bytes path's stderr capture, which now flows through the shared line buffer.
+		// Guards the bytes path's stderr capture (now a faithful TextBufferSink).
 		var runner = new ProcessRunner();
 		var result = await runner.GetBytesOutputAsync(TestExe.BothStreams("STDOUT-DATA", "STDERR-DATA"));
 
 		Assert.That(System.Text.Encoding.UTF8.GetString(result.StdOut), Does.Contain("STDOUT-DATA"));
 		Assert.That(result.StdErr, Does.Contain("STDERR-DATA"));
+		Assert.That(result.StdErr, Does.EndWith("\n")); // faithful: trailing newline preserved
 		Assert.That(result.ExitCode, Is.Zero);
+	}
+
+	[Test]
+	public async Task GetFullOutputAsync_PreservesExactStdOut_LineEndingsAndTrailingNewline()
+	{
+		var runner = new ProcessRunner();
+		// Exact stdout bytes: CRLF line endings plus a trailing newline. Faithful capture must
+		// reproduce them verbatim (no normalization to the host newline, no dropped terminator).
+		var result = await runner.GetFullOutputAsync(TestExe.Binary("a\r\nb\r\n"u8.ToArray()));
+
+		Assert.That(result.StdOut, Is.EqualTo("a\r\nb\r\n"));
+	}
+
+	[Test]
+	public async Task GetFullOutputAsync_StdOut_RoundTripsRawBytes()
+	{
+		var runner = new ProcessRunner();
+		var payload = "x\r\ny\nz"u8.ToArray(); // mixed CRLF, LF, and no trailing newline
+
+		var text = (await runner.GetFullOutputAsync(TestExe.Binary(payload))).StdOut;
+		var bytes = (await runner.GetBytesOutputAsync(TestExe.Binary(payload))).StdOut;
+
+		Assert.That(bytes, Is.EqualTo(payload));
+		Assert.That(System.Text.Encoding.UTF8.GetBytes(text), Is.EqualTo(payload));
+	}
+
+	[Test]
+	public async Task GetFullOutputAsync_PreservesTrailingNewline_OnBothStreams()
+	{
+		var runner = new ProcessRunner();
+		var result = await runner.GetFullOutputAsync(TestExe.BothStreams("OUT", "ERR"));
+
+		Assert.That(result.StdOut, Does.EndWith("\n"));
+		Assert.That(result.StdErr, Does.EndWith("\n"));
+		Assert.That(result.StdOut, Does.Contain("OUT"));
+		Assert.That(result.StdErr, Does.Contain("ERR"));
+	}
+
+	[Test]
+	public async Task GetFullOutputAsync_StandardOutputHandler_StillFiresPerLine()
+	{
+		// The faithful TextBufferSink must still tee each decoded line to the handler.
+		var runner = new ProcessRunner();
+		var captured = new List<string>();
+		var options = new ProcessRunOptions { StandardOutputHandler = captured.Add };
+
+		await runner.GetFullOutputAsync(TestExe.MultiLineEcho("L1", "L2", "L3"), options);
+
+		Assert.That(captured, Is.EqualTo((string[])["L1", "L2", "L3"]));
 	}
 
 	[Test]

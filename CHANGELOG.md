@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 -
 
 ### Fixed
--
+- `GetFullOutputAsync` now captures stdout/stderr faithfully — exact line endings and any trailing newline are preserved instead of being normalized to the host newline and truncated. `GetBytesOutputAsync`'s captured `StdErr` is likewise faithful. (`ToResultAsync`, which reads the line-oriented handle, remains line-normalized — its XML doc now says so and points to the faithful helpers.)
 
 ## [1.3.1] - 2026-05-31
 
