@@ -190,6 +190,14 @@ Console.WriteLine(
 `PeakMemoryBytes`, `WasTimedOut`, the `Exited` cancellation token, and the `Completion`
 task that resolves with the raw exit code.
 
+From a handle you can also collapse to a result or get a timeout-aware exit code:
+
+```csharp
+await using var p = runner.Start("git", ["status"]);
+ProcessResult<string> result = await p.ToResultAsync();   // drain stdout+stderr+exit
+int code = await p.CompletionOrThrowAsync();              // throws TimeoutException if Timeout fired
+```
+
 > **Always dispose the handle** (use `await using`). Disposing kills the process if it is
 > still running, drains the pumps, and releases the underlying group when the runner owns it.
 > Breaking out of a `foreach` over `StdOut` early does **not** kill the process — dispose to terminate.
@@ -235,6 +243,24 @@ var slow = fast with { Timeout = TimeSpan.FromMinutes(5) };
 | `ProcessGroup` | Join a caller-owned group (see below). `null` → private group, auto-disposed. |
 | `Timeout` | Auto-kill after the duration; surfaces as `WasTimedOut`. |
 | `StdOutEncoding` / `StdErrEncoding` | Override decoding (defaults to UTF-8). |
+| `OutputBuffer` | Cap unconsumed stdout/stderr (`OutputBufferPolicy`, drop-oldest/newest). `null` → unbounded. |
+| `WorkingDirectory` / `Environment` | Working dir / env for the `Start(exe, args)` convenience overloads. |
+
+### Bounding memory on unconsumed output
+
+The pumps always drain the OS pipe so the child never blocks — which means unconsumed stderr
+buffers unbounded by default (a risk on chatty processes you don't read). Cap it without ever
+blocking the child:
+
+```csharp
+var options = new ProcessRunOptions
+{
+    OutputBuffer = new OutputBufferPolicy { MaxBufferedLines = 1_000, Overflow = OutputOverflowMode.DropOldest },
+};
+```
+
+Line counters (`StdOutLineCount` / `StdErrLineCount`) still count every line read off the pipe, so
+`StdOutLineCount` greater than the number of lines you received means some were dropped.
 
 ## Timeout vs. cancellation
 

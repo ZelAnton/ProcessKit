@@ -38,4 +38,10 @@
 		<PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
 	</ItemGroup>
 
+	<ItemGroup>
+		<!-- Exposes internal seams (ProcessSession, sinks, IProcessHandle) to the test assembly so
+		     the lifecycle can be unit-tested against an in-memory fake. Test-only; not in the package. -->
+		<InternalsVisibleTo Include="ProcessKit.Tests" />
+	</ItemGroup>
+
 </Project>

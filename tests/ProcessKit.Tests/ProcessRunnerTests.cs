@@ -185,6 +185,24 @@ public class ProcessRunnerTests
 	}
 
 	[Test]
+	public async Task GetBytesOutputAsync_CapturesStdErr()
+	{
+		// Guards the bytes path's stderr capture, which now flows through the shared line buffer.
+		var runner = new ProcessRunner();
+		var result = await runner.GetBytesOutputAsync(TestExe.BothStreams("STDOUT-DATA", "STDERR-DATA"));
+
+		Assert.That(System.Text.Encoding.UTF8.GetString(result.StdOut), Does.Contain("STDOUT-DATA"));
+		Assert.That(result.StdErr, Does.Contain("STDERR-DATA"));
+		Assert.That(result.ExitCode, Is.Zero);
+	}
+
+	[Test]
+	public void OutputBufferPolicy_NegativeMaxBufferedLines_Throws()
+	{
+		Assert.Throws<ArgumentOutOfRangeException>(() => _ = new OutputBufferPolicy { MaxBufferedLines = -1 });
+	}
+
+	[Test]
 	public async Task StandardOutputHandler_FiresPerLine()
 	{
 		var runner = new ProcessRunner();
@@ -369,5 +387,79 @@ public class ProcessRunnerTests
 		var ex = Assert.ThrowsAsync<ProcessExitException>(async () =>
 			await runner.GetFullOutputAsync(TestExe.ExitWith(2)).EnsureSuccessAsync());
 		Assert.That(ex!.ExitCode, Is.EqualTo(2));
+	}
+
+	[Test]
+	public async Task ToResultAsync_FromHandle_CapturesStdOutStdErrExit()
+	{
+		var runner = new ProcessRunner();
+		await using var p = runner.Start(TestExe.BothStreams("out-line", "err-line"));
+
+		var result = await p.ToResultAsync();
+
+		Assert.That(result.StdOut, Does.Contain("out-line"));
+		Assert.That(result.StdErr, Does.Contain("err-line"));
+		Assert.That(result.ExitCode, Is.Zero);
+	}
+
+	[Test]
+	public void CompletionOrThrowAsync_OnTimeout_ThrowsTimeoutException()
+	{
+		var runner = new ProcessRunner();
+		var options = new ProcessRunOptions { Timeout = TimeSpan.FromMilliseconds(300) };
+
+		Assert.ThrowsAsync<TimeoutException>(async () =>
+		{
+			await using var p = runner.Start(TestExe.Sleep(30), options);
+			await p.CompletionOrThrowAsync();
+		});
+	}
+
+	[Test]
+	public async Task CompletionOrThrowAsync_OnNormalExit_ReturnsExitCode()
+	{
+		var runner = new ProcessRunner();
+		await using var p = runner.Start(TestExe.ExitWith(0));
+
+		var code = await p.CompletionOrThrowAsync();
+
+		Assert.That(code, Is.Zero);
+	}
+
+	[Test]
+	public async Task Options_WorkingDirectory_AppliesToConvenienceOverload()
+	{
+		var runner = new ProcessRunner();
+		var tempDir = Directory.CreateTempSubdirectory("processkit-wd-");
+		try
+		{
+			var options = new ProcessRunOptions { WorkingDirectory = tempDir.FullName };
+			var result = OperatingSystem.IsWindows()
+				? await runner.GetFullOutputAsync("cmd", ["/c", "cd"], options)
+				: await runner.GetFullOutputAsync("sh", ["-c", "pwd"], options);
+
+			// The unique temp-subdir name appears regardless of symlink resolution (e.g. macOS /private/var).
+			Assert.That(result.StdOut, Does.Contain(tempDir.Name));
+		}
+		finally
+		{
+			tempDir.Delete(recursive: true);
+		}
+	}
+
+	[Test]
+	public async Task Options_Environment_AppliesToConvenienceOverload()
+	{
+		var runner = new ProcessRunner();
+		var options = new ProcessRunOptions
+		{
+			Environment = new Dictionary<string, string?> { ["PROCESSKIT_TEST_VAR"] = "hello-env" },
+		};
+
+		var result = OperatingSystem.IsWindows()
+			? await runner.GetFullOutputAsync("cmd", ["/c", "echo %PROCESSKIT_TEST_VAR%"], options)
+			: await runner.GetFullOutputAsync("sh", ["-c", "echo $PROCESSKIT_TEST_VAR"], options);
+
+		Assert.That(result.StdOut.Trim(), Is.EqualTo("hello-env"));
 	}
 }

@@ -115,6 +115,20 @@ Everything else (`GetOutputAsync`, `GetFirstLineOutputAsync`, `GetFullOutputAsyn
 
 `ProcessRunner.Default` is a static singleton for callers that don't use DI: `await ProcessRunner.Default.GetFullOutputAsync(...)`. The runner is stateless so the singleton is thread-safe.
 
+#### `ProcessSession` — the single lifecycle core
+
+[ProcessSession](src/ProcessKit/ProcessSession.cs) (internal) owns the **entire** process lifecycle exactly once: group ownership (private/shared), `_killCts` (linked to the caller token), the separate `_timeoutCts` cascade that drives `WasTimedOut`, exit handling (`OnProcessExited`, the `_exitedHandled` guard, diagnostics caching), stdin/stdout/stderr pump orchestration, and the bounded 5 s `DisposeAsync` teardown. Both consumers are thin layers over it:
+
+- **`RunningProcess`** (the line-oriented `IRunningProcess`) wraps a `ProcessSession` plus a `LineChannelStdOutSink`; it just delegates every member.
+- **`GetBytesOutputAsyncCore`** builds a `ProcessSession` with a `ByteBufferStdOutSink`. The bytes path is no longer a separate lifecycle — the duplication that previously existed is gone.
+
+Stdout transport is the only thing that varies, behind two small internal seams:
+
+- **`IStdOutSink`** ([IStdOutSink.cs](src/ProcessKit/IStdOutSink.cs)) — *decoding mode*: `LineChannelStdOutSink` (decoded lines → `ILineBuffer`, tracks `LineCount`, tees to `StandardOutputHandler`) vs `ByteBufferStdOutSink` (raw `BaseStream` → `MemoryStream`, never line-decoded). Stderr is always line-oriented and owned by the session directly.
+- **`ILineBuffer`** ([ILineBuffer.cs](src/ProcessKit/ILineBuffer.cs)) — *backlog policy*: `UnboundedLineBuffer` (default), `BoundedLineBuffer` (`Channel.CreateBounded` with `DropOldest`/`DropNewest` — `TryWrite` never blocks the pump), `DiscardLineBuffer` (cap 0). Selected via `ILineBuffer.Create(options?.OutputBuffer)`. Used by both the line stdout sink and the session's stderr.
+
+**`IProcessHandle` test seam** ([IProcessHandle.cs](src/ProcessKit/IProcessHandle.cs)) abstracts the slice of `System.Diagnostics.Process` the session needs. `RealProcessHandleFactory.Start` calls `group.Start(psi, killToken)` (which still assigns the process to the Job Object / pgid **and** registers kill-on-cancel) then wraps the real `Process` — so the kernel guarantee is untouched and lives entirely in `ProcessGroup`. The library exposes internals to `ProcessKit.Tests` via `<InternalsVisibleTo>` so a `FakeProcessHandle` can drive the session deterministically (exit races, idempotent exit, timeout/cancellation, diagnostics caching, sink dispatch) without spawning real OS processes — see [ProcessSessionTests.cs](tests/ProcessKit.Tests/ProcessSessionTests.cs). The native kill-on-dispose guarantee itself stays an integration test (real handle required).
+
 #### The handle: `IRunningProcess`
 
 ```csharp
@@ -135,7 +149,7 @@ public interface IRunningProcess : IAsyncDisposable
 }
 ```
 
-Both `StdOut` and `StdErr` are backed by unbounded `Channel<string>`s pumped by background tasks (`PumpLinesAsync` in [PipePumpHelpers.cs](src/ProcessKit/PipePumpHelpers.cs)). Pumps run unconditionally — even if the caller never enumerates the streams — so the process never blocks on a full OS pipe buffer. That means unconsumed `StdErr` will buffer indefinitely on chatty processes; the XML-doc on `StdErr` documents this OOM risk.
+Both `StdOut` and `StdErr` are backed by an `ILineBuffer` (an unbounded `Channel<string>` by default) pumped by background tasks (`PumpLinesAsync` in [PipePumpHelpers.cs](src/ProcessKit/PipePumpHelpers.cs)). Pumps run unconditionally — even if the caller never enumerates the streams — so the process never blocks on a full OS pipe buffer. Unconsumed output buffers indefinitely by default (the documented OOM risk); set `ProcessRunOptions.OutputBuffer` to cap the backlog. The line **counters increment before the buffer write**, so they count every line read off the pipe even when a bounded policy drops it (count > lines received ⇒ dropped lines).
 
 `Completion` may resolve before the last few lines reach `StdOut` — `Process.Exited` fires when the process exits, not when the pipes are fully drained. `await p.Completion` does not guarantee stdout has been fully consumed; if both matter, await both.
 
@@ -155,8 +169,13 @@ public sealed record ProcessRunOptions
     public TimeSpan? Timeout { get; init; }                         // auto-kill after this duration (drives WasTimedOut)
     public Encoding? StdOutEncoding { get; init; }                  // overrides PSI; UTF-8 fallback
     public Encoding? StdErrEncoding { get; init; }
+    public OutputBufferPolicy? OutputBuffer { get; init; }          // null → unbounded; caps the unconsumed backlog (non-blocking drop)
+    public string? WorkingDirectory { get; init; }                 // convenience (exe,args) overloads only
+    public IReadOnlyDictionary<string, string?>? Environment { get; init; }  // convenience overloads only; null value removes a var
 }
 ```
+
+`OutputBuffer` (`OutputBufferPolicy { int? MaxBufferedLines; OutputOverflowMode Overflow }`) caps the in-memory backlog of unconsumed lines per stream; the pump always keeps draining the OS pipe (drop, never block). `GetExitCodeAsync` auto-sets `MaxBufferedLines = 0` (discard) when the caller gives no policy, since it never exposes output. `WorkingDirectory`/`Environment` apply **only** to the `Start(exe, args)` convenience overloads (`BuildStartInfo`); for the `ProcessStartInfo` overloads, set them on the PSI.
 
 Declared as a `record class` so callers can derive variants via `with`-expression: `var slow = fast with { Timeout = TimeSpan.FromMinutes(5) };`. Equality is structural (handlers compared via `Delegate.Equals`, `ProcessGroup` by reference).
 
@@ -164,7 +183,7 @@ Push handlers run in parallel to the corresponding `IAsyncEnumerable`. Both can 
 
 #### `StandardInput`
 
-Closed union of factory methods — `private protected` constructor blocks external derivation, internal sealed subtypes drive the pattern-match in `WriteStandardInputAsync`:
+Closed union of factory methods — `private protected` constructor blocks external derivation. Each internal sealed subtype overrides `internal virtual Task WriteToAsync(Stream destination, CancellationToken)` to pump itself into stdin (the base is a no-op for `Empty`). `WriteStandardInputAsync` in [PipePumpHelpers.cs](src/ProcessKit/PipePumpHelpers.cs) just dispatches `(input ?? Empty).WriteToAsync(...)` and keeps the broad-catch containment and the always-close-stdin `finally` in one place — adding a new input source is a closed, single-file change in [StandardInput.cs](src/ProcessKit/StandardInput.cs), no switch to edit:
 
 - `StandardInput.Empty`
 - `StandardInput.FromString(string, Encoding? = UTF-8)`
@@ -188,11 +207,11 @@ The runner itself never throws on non-zero exit — it always returns the result
 
 #### `GetBytesOutputAsync` — the one special case
 
-`GetBytesOutputAsync` is the only extension that **does not** go through `IRunningProcess` — the handle is line-oriented (channels of `string`), and forcing binary stdout through string decoding would be lossy. Instead it talks to `ProcessGroup` directly and copies `process.StandardOutput.BaseStream` into a `MemoryStream`. Stderr is still captured via the standard pump helpers. Some boilerplate is duplicated from `RunningProcess` to avoid leaking raw streams onto the public `IRunningProcess`.
+`GetBytesOutputAsync` is the only extension that **does not** surface an `IRunningProcess` — the handle is line-oriented (channels of `string`), and forcing binary stdout through string decoding would be lossy. It builds a `ProcessSession` with a `ByteBufferStdOutSink` (raw `BaseStream` → `MemoryStream`); stderr still flows through the session's line buffer. It shares the full lifecycle with `RunningProcess` — no duplicated group/timeout/exit logic. It awaits `session.StdOutPumpCompletion` before reading the captured bytes, because `Completion` can resolve before the pipe is fully drained.
 
 #### Disposal sequencing
 
-`RunningProcess.DisposeAsync` is idempotent (Interlocked guard). On dispose:
+`ProcessSession.DisposeAsync` (which `RunningProcess.DisposeAsync` delegates to) is idempotent (Interlocked guard). On dispose:
 1. Cancel `_killCts` — the linked-token registration inside `ProcessGroup.Start` kills the process.
 2. Wait up to **5 seconds** for stdout/stderr/stdin pumps to wind down (bounded — a stuck OS pipe must not hang dispose forever).
 3. Complete both channels (in case a pump never observed EOF).

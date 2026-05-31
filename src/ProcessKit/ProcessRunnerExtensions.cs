@@ -30,7 +30,7 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return runner.Start(BuildStartInfo(executable, arguments), options, cancellationToken);
+			return runner.Start(BuildStartInfo(executable, arguments, options), options, cancellationToken);
 		}
 
 		public IAsyncEnumerable<string> GetOutputAsync(
@@ -51,7 +51,7 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetOutputAsyncCore(runner, BuildStartInfo(executable, arguments), options, cancellationToken);
+			return GetOutputAsyncCore(runner, BuildStartInfo(executable, arguments, options), options, cancellationToken);
 		}
 	}
 
@@ -96,7 +96,7 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetFirstLineOutputAsyncCore(runner, BuildStartInfo(executable, arguments), predicate, options, cancellationToken);
+			return GetFirstLineOutputAsyncCore(runner, BuildStartInfo(executable, arguments, options), predicate, options, cancellationToken);
 		}
 	}
 
@@ -138,7 +138,7 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetFullOutputAsyncCore(runner, BuildStartInfo(executable, arguments), options, cancellationToken);
+			return GetFullOutputAsyncCore(runner, BuildStartInfo(executable, arguments, options), options, cancellationToken);
 		}
 	}
 
@@ -149,6 +149,11 @@ public static class ProcessRunnerExtensions
 		CancellationToken cancellationToken)
 	{
 		await using var p = runner.Start(psi, options, cancellationToken);
+		return await ToResultAsyncCore(p, cancellationToken).ConfigureAwait(false);
+	}
+
+	static async Task<ProcessResult<string>> ToResultAsyncCore(IRunningProcess p, CancellationToken cancellationToken)
+	{
 		var stdoutTask = AccumulateLinesAsync(p.StdOut, cancellationToken);
 		var stderrTask = AccumulateLinesAsync(p.StdErr, cancellationToken);
 
@@ -199,7 +204,7 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetBytesOutputAsyncCore(BuildStartInfo(executable, arguments), options, cancellationToken);
+			return GetBytesOutputAsyncCore(BuildStartInfo(executable, arguments, options), options, cancellationToken);
 		}
 	}
 
@@ -208,74 +213,18 @@ public static class ProcessRunnerExtensions
 		ProcessRunOptions? options,
 		CancellationToken cancellationToken)
 	{
-		var psi = PipePumpHelpers.PrepareStartInfo(source, options);
+		// Bytes path runs on the same ProcessSession lifecycle as the line handle, but with a raw
+		// byte sink for stdout instead of the line channel. The session disposes the sink.
+		var sink = new ByteBufferStdOutSink();
+		await using var session = new ProcessSession(source, options, sink, RealProcessHandleFactory.Instance, cancellationToken);
 
-		var ownsGroup = options?.ProcessGroup is null;
-		var group = options?.ProcessGroup ?? new ProcessGroup();
+		// Await the raw stdout copy before reading the buffer — Completion can resolve before the
+		// pipe is fully drained. stderr is always line-oriented; accumulate it into a string.
+		await session.StdOutPumpCompletion.ConfigureAwait(false);
+		var stderr = await AccumulateLinesAsync(session.StdErr, cancellationToken).ConfigureAwait(false);
+		var exit = await session.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-		using var killCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-		// Separate timeout CTS so we can distinguish "kill due to Options.Timeout" from
-		// "kill due to caller cancellation" — needed for ProcessResult.WasTimedOut.
-		using var timeoutCts = options?.Timeout is { } timeout ? new CancellationTokenSource(timeout) : null;
-		CancellationTokenRegistration timeoutRegistration = default;
-		if (timeoutCts is not null)
-		{
-			timeoutRegistration = timeoutCts.Token.UnsafeRegister(static state =>
-			{
-				try
-				{
-					((CancellationTokenSource)state!).Cancel();
-				}
-				catch (ObjectDisposedException)
-				{
-					// runner is being torn down concurrently — killCts already disposed; nothing to cancel.
-				}
-			}, killCts);
-		}
-
-		try
-		{
-			using var process = group.Start(psi, killCts.Token);
-
-			var stdinTask = PipePumpHelpers.WriteStandardInputAsync(process, options?.StandardInput, killCts.Token);
-
-			var stderrBuffer = new StringBuilder();
-			var stderrTask = PipePumpHelpers.ReadIntoBufferAsync(
-				process.StandardError, stderrBuffer, options?.StandardErrorHandler, killCts.Token);
-
-			using var stdoutBuffer = new MemoryStream();
-			try
-			{
-				await process.StandardOutput.BaseStream.CopyToAsync(stdoutBuffer, killCts.Token).ConfigureAwait(false);
-			}
-			catch (SystemException e) when (e is OperationCanceledException or IOException)
-			{
-				// ignored - killed via token
-			}
-
-			await PipePumpHelpers.ObserveAsync(stderrTask).ConfigureAwait(false);
-			await PipePumpHelpers.ObserveAsync(stdinTask).ConfigureAwait(false);
-			await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-
-			int exitCode;
-			try
-			{
-				exitCode = process.ExitCode;
-			}
-			catch (InvalidOperationException)
-			{
-				exitCode = -1;
-			}
-
-			var wasTimedOut = timeoutCts?.IsCancellationRequested ?? false;
-			return new ProcessResult<byte[]>(stdoutBuffer.ToArray(), stderrBuffer.ToString(), exitCode) { WasTimedOut = wasTimedOut };
-		}
-		finally
-		{
-			timeoutRegistration.Dispose();
-			if (ownsGroup)
-				await group.DisposeAsync().ConfigureAwait(false);
-		}
+		return new ProcessResult<byte[]>(sink.ToArray(), stderr, exit) { WasTimedOut = session.WasTimedOut };
 	}
 
 	// ──────────────────────────────────────────────────────────────────────────────────────
@@ -302,7 +251,7 @@ public static class ProcessRunnerExtensions
 		{
 			ArgumentNullException.ThrowIfNull(runner);
 
-			return GetExitCodeAsyncCore(runner, BuildStartInfo(executable, arguments), options, cancellationToken);
+			return GetExitCodeAsyncCore(runner, BuildStartInfo(executable, arguments, options), options, cancellationToken);
 		}
 	}
 
@@ -312,6 +261,12 @@ public static class ProcessRunnerExtensions
 		ProcessRunOptions? options,
 		CancellationToken cancellationToken)
 	{
+		// Nobody consumes the output here, so default to discarding it (memory-flat) unless the
+		// caller explicitly asked for a buffer policy. The pumps still drain the OS pipe.
+		options ??= new ProcessRunOptions();
+		if (options.OutputBuffer is null)
+			options = options with { OutputBuffer = new OutputBufferPolicy { MaxBufferedLines = 0 } };
+
 		await using var p = runner.Start(psi, options, cancellationToken);
 
 		var drainStdOut = Task.Run(async () =>
@@ -374,8 +329,44 @@ public static class ProcessRunnerExtensions
 	}
 
 	// ──────────────────────────────────────────────────────────────────────────────────────
+	// Handle-level conveniences
+	// ──────────────────────────────────────────────────────────────────────────────────────
 
-	static ProcessStartInfo BuildStartInfo(string executable, IEnumerable<string> arguments)
+	extension(IRunningProcess process)
+	{
+		/// <summary>
+		/// Drains stdout and stderr to completion and returns the captured result — the same work
+		/// <see cref="GetFullOutputAsync(IProcessRunner, ProcessStartInfo, ProcessRunOptions?, CancellationToken)"/>
+		/// does, but from an already-started handle. Does <strong>not</strong> dispose the handle;
+		/// the caller still owns it.
+		/// </summary>
+		public Task<ProcessResult<string>> ToResultAsync(CancellationToken cancellationToken = default)
+		{
+			ArgumentNullException.ThrowIfNull(process);
+
+			return ToResultAsyncCore(process, cancellationToken);
+		}
+
+		/// <summary>
+		/// Awaits <see cref="IRunningProcess.Completion"/> and returns the exit code, but throws
+		/// <see cref="TimeoutException"/> if the process was killed because
+		/// <see cref="ProcessRunOptions.Timeout"/> elapsed — removing the ambiguity between a timeout
+		/// kill and a process that genuinely exited with a kill-like code.
+		/// </summary>
+		public async Task<int> CompletionOrThrowAsync(CancellationToken cancellationToken = default)
+		{
+			ArgumentNullException.ThrowIfNull(process);
+
+			var code = await process.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+			if (process.WasTimedOut)
+				throw new TimeoutException("The process was killed because its configured timeout elapsed.");
+			return code;
+		}
+	}
+
+	// ──────────────────────────────────────────────────────────────────────────────────────
+
+	static ProcessStartInfo BuildStartInfo(string executable, IEnumerable<string> arguments, ProcessRunOptions? options)
 	{
 		ArgumentException.ThrowIfNullOrEmpty(executable);
 		ArgumentNullException.ThrowIfNull(arguments);
@@ -383,6 +374,23 @@ public static class ProcessRunnerExtensions
 		var psi = new ProcessStartInfo(executable);
 		foreach (var arg in arguments)
 			psi.ArgumentList.Add(arg);
+
+		// WorkingDirectory / Environment from options apply only to the convenience overloads — the
+		// PSI overloads carry these on the supplied ProcessStartInfo, which PrepareStartInfo clones.
+		if (options?.WorkingDirectory is { } workingDirectory)
+			psi.WorkingDirectory = workingDirectory;
+
+		if (options?.Environment is { } environment)
+		{
+			foreach (var (key, value) in environment)
+			{
+				if (value is null)
+					psi.Environment.Remove(key);
+				else
+					psi.Environment[key] = value;
+			}
+		}
+
 		return psi;
 	}
 }

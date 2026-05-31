@@ -25,20 +25,25 @@ public interface IRunningProcess : IAsyncDisposable
 	/// The implementation always drains stderr in the background to prevent the process from
 	/// blocking on a full stderr pipe. If the caller subscribes neither to this stream nor to the
 	/// optional <see cref="ProcessRunOptions.StandardErrorHandler"/>, stderr lines accumulate in
-	/// memory until the handle is disposed — potential OOM on extremely chatty processes. The
+	/// memory until the handle is disposed — potential OOM on extremely chatty processes. Set
+	/// <see cref="ProcessRunOptions.OutputBuffer"/> to cap the backlog and remove that risk. The
 	/// stream may be enumerated at most once.
 	/// </remarks>
 	IAsyncEnumerable<string> StdErr { get; }
 
 	/// <summary>
-	/// Number of stdout lines observed so far. Updated atomically as each line is read.
-	/// Stable after the process exits.
+	/// Number of stdout lines observed so far. Updated atomically as each line is read off the pipe.
+	/// Stable after the process exits. Counts every line read even if a configured
+	/// <see cref="ProcessRunOptions.OutputBuffer"/> later dropped it from the replay buffer — so a
+	/// count greater than the number of lines received from <see cref="StdOut"/> indicates dropped lines.
 	/// </summary>
 	int StdOutLineCount { get; }
 
 	/// <summary>
-	/// Number of stderr lines observed so far. Updated atomically as each line is read.
-	/// Stable after the process exits. <c>0</c> means the process wrote nothing to stderr.
+	/// Number of stderr lines observed so far. Updated atomically as each line is read off the pipe.
+	/// Stable after the process exits. <c>0</c> means the process wrote nothing to stderr. Like
+	/// <see cref="StdOutLineCount"/>, counts every line even if <see cref="ProcessRunOptions.OutputBuffer"/>
+	/// dropped it from the replay buffer.
 	/// </summary>
 	int StdErrLineCount { get; }
 

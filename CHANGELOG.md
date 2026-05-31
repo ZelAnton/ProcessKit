@@ -8,10 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
--
+- `ProcessRunOptions.OutputBuffer` (`OutputBufferPolicy` with `OutputOverflowMode`) caps how many unconsumed stdout/stderr lines are buffered, with a non-blocking drop-oldest/drop-newest policy — closing the OOM risk on chatty processes whose output is never consumed.
+- `IRunningProcess.ToResultAsync(...)` extension drains an already-started handle into a `ProcessResult<string>`.
+- `IRunningProcess.CompletionOrThrowAsync(...)` extension awaits the exit code but throws `TimeoutException` when the process was killed by `ProcessRunOptions.Timeout`.
+- `ProcessRunOptions.WorkingDirectory` and `ProcessRunOptions.Environment` set the working directory and environment for the convenience `Start(executable, arguments, …)` overloads.
 
 ### Changed
--
+- `GetExitCodeAsync` now discards stdout/stderr by default (memory-flat) instead of buffering it unboundedly, since it never exposes the output. Supply an `OutputBuffer` policy to override.
+- `GetBytesOutputAsync` now throws `OperationCanceledException` when the caller's `CancellationToken` is cancelled, consistent with `GetFullOutputAsync`; a `Timeout` still returns a partial result with `WasTimedOut` set.
 
 ### Fixed
 - Standard input is now always closed at start when no `StandardInput` is supplied, matching the documented contract. Previously the child inherited the parent's stdin, so a process that reads stdin (e.g. `cat`) could block forever when run with no input.

@@ -28,7 +28,17 @@ if (child.ExitCode != 0)
 }
 
 var stats = group.GetStats();
+
+// Exercise the ProcessRunner / ProcessSession path under Native AOT too (sinks, line channels,
+// the IProcessHandle seam) — not just the ProcessGroup lifetime layer.
+var runnerResult = await ProcessRunner.Default.GetFullOutputAsync("/bin/sh", ["-c", "echo runner-aot"]);
+if (runnerResult.ExitCode != 0 || !runnerResult.StdOut.Contains("runner-aot", StringComparison.Ordinal))
+{
+	Console.Error.WriteLine($"AOT smoke FAIL: runner stdout '{runnerResult.StdOut}' exit {runnerResult.ExitCode}");
+	return 1;
+}
+
 Console.WriteLine(
 	$"AOT smoke OK. exit={child.ExitCode} active={stats.ActiveProcessCount} " +
-	$"cpu={stats.TotalCpuTime} peakMem={stats.PeakMemoryBytes}");
+	$"cpu={stats.TotalCpuTime} peakMem={stats.PeakMemoryBytes} runner='{runnerResult.StdOut.Trim()}'");
 return 0;

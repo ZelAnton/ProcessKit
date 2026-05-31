@@ -68,4 +68,27 @@ public sealed record ProcessRunOptions
 	/// when both are <c>null</c>.
 	/// </summary>
 	public Encoding? StdErrEncoding { get; init; }
+
+	/// <summary>
+	/// Bounds how much unconsumed stdout/stderr is buffered in memory. <c>null</c> (default) keeps
+	/// the historical unbounded behavior for callers that actively consume the streams; set a cap
+	/// to protect the "never consumed" case. See <see cref="OutputBufferPolicy"/>.
+	/// </summary>
+	public OutputBufferPolicy? OutputBuffer { get; init; }
+
+	/// <summary>
+	/// Working directory for the convenience <c>Start(executable, arguments, …)</c> overloads.
+	/// Ignored when a full <see cref="System.Diagnostics.ProcessStartInfo"/> is supplied — set
+	/// <see cref="System.Diagnostics.ProcessStartInfo.WorkingDirectory"/> on the PSI instead.
+	/// <c>null</c> inherits the current directory.
+	/// </summary>
+	public string? WorkingDirectory { get; init; }
+
+	/// <summary>
+	/// Environment variables for the convenience <c>Start(executable, arguments, …)</c> overloads,
+	/// applied over the inherited environment; a <c>null</c> value removes the variable. Ignored
+	/// when a full <see cref="System.Diagnostics.ProcessStartInfo"/> is supplied — set
+	/// <see cref="System.Diagnostics.ProcessStartInfo.Environment"/> on the PSI instead.
+	/// </summary>
+	public IReadOnlyDictionary<string, string?>? Environment { get; init; }
 }

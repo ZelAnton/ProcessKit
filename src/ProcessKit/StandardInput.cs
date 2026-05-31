@@ -10,11 +10,22 @@ namespace ProcessKit;
 /// </summary>
 /// <remarks>
 /// The type is a closed hierarchy: only the implementations shipped with this library are valid.
-/// Runners pattern-match on the concrete subtype to decide how to pump input.
+/// Each subtype knows how to pump itself into the child's stdin via <c>WriteToAsync</c>; the
+/// runner orchestrates that call and owns the surrounding exception-containment and stdin-close.
 /// </remarks>
 public abstract class StandardInput
 {
 	private protected StandardInput() { }
+
+	/// <summary>
+	/// Pumps this input source into <paramref name="destination"/> (the child's redirected stdin
+	/// base stream). Implementations must NOT close <paramref name="destination"/> — the runner
+	/// closes it in one place so the "stdin is closed at start" contract holds uniformly. The base
+	/// implementation writes nothing (used by <see cref="Empty"/>). Implementations may throw; the
+	/// runner contains exceptions so a faulty user-supplied source never derails teardown.
+	/// </summary>
+	internal virtual Task WriteToAsync(Stream destination, CancellationToken cancellationToken)
+		=> Task.CompletedTask;
 
 	/// <summary>Represents "no input"; stdin is closed immediately after the process starts.</summary>
 	public static StandardInput Empty { get; } = new EmptyInput();
@@ -82,37 +93,78 @@ public abstract class StandardInput
 
 	internal sealed class EmptyInput : StandardInput;
 
-	internal sealed class StringInput(string Text, Encoding Encoding) : StandardInput
+	internal sealed class StringInput(string text, Encoding encoding) : StandardInput
 	{
-		public string Text { get; } = Text;
-		public Encoding Encoding { get; } = Encoding;
+		internal override async Task WriteToAsync(Stream destination, CancellationToken cancellationToken)
+		{
+			var bytes = encoding.GetBytes(text);
+			await destination.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+		}
 	}
 
-	internal sealed class BytesInput(ReadOnlyMemory<byte> Bytes) : StandardInput
+	internal sealed class BytesInput(ReadOnlyMemory<byte> bytes) : StandardInput
 	{
-		public ReadOnlyMemory<byte> Bytes { get; } = Bytes;
+		internal override async Task WriteToAsync(Stream destination, CancellationToken cancellationToken)
+			=> await destination.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
 	}
 
-	internal sealed class StreamInput(Stream Stream, bool LeaveOpen) : StandardInput
+	internal sealed class StreamInput(Stream stream, bool leaveOpen) : StandardInput
 	{
-		public Stream Stream { get; } = Stream;
-		public bool LeaveOpen { get; } = LeaveOpen;
+		internal override async Task WriteToAsync(Stream destination, CancellationToken cancellationToken)
+		{
+			try
+			{
+				await stream.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+			}
+			finally
+			{
+				if (!leaveOpen)
+					await stream.DisposeAsync().ConfigureAwait(false);
+			}
+		}
 	}
 
-	internal sealed class LinesInput(IAsyncEnumerable<string> Lines, Encoding Encoding) : StandardInput
+	internal sealed class LinesInput(IAsyncEnumerable<string> lines, Encoding encoding) : StandardInput
 	{
-		public IAsyncEnumerable<string> Lines { get; } = Lines;
-		public Encoding Encoding { get; } = Encoding;
+		internal override async Task WriteToAsync(Stream destination, CancellationToken cancellationToken)
+		{
+			var newline = encoding.GetBytes(Environment.NewLine);
+			await foreach (var line in lines.WithCancellation(cancellationToken).ConfigureAwait(false))
+			{
+				var bytes = encoding.GetBytes(line);
+				await destination.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+				await destination.WriteAsync(newline, cancellationToken).ConfigureAwait(false);
+			}
+		}
 	}
 
-	internal sealed class EnumerableInput(IEnumerable<string> Lines, Encoding Encoding) : StandardInput
+	internal sealed class EnumerableInput(IEnumerable<string> lines, Encoding encoding) : StandardInput
 	{
-		public IEnumerable<string> Lines { get; } = Lines;
-		public Encoding Encoding { get; } = Encoding;
+		internal override async Task WriteToAsync(Stream destination, CancellationToken cancellationToken)
+		{
+			var newline = encoding.GetBytes(Environment.NewLine);
+			foreach (var line in lines)
+			{
+				cancellationToken.ThrowIfCancellationRequested();
+				var bytes = encoding.GetBytes(line);
+				await destination.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+				await destination.WriteAsync(newline, cancellationToken).ConfigureAwait(false);
+			}
+		}
 	}
 
-	internal sealed class FileInput(string Path) : StandardInput
+	internal sealed class FileInput(string path) : StandardInput
 	{
-		public string Path { get; } = Path;
+		internal override async Task WriteToAsync(Stream destination, CancellationToken cancellationToken)
+		{
+			await using var fs = new FileStream(
+				path,
+				FileMode.Open,
+				FileAccess.Read,
+				FileShare.Read,
+				bufferSize: 4096,
+				useAsync: true);
+			await fs.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+		}
 	}
 }

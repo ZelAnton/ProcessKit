@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using System.Threading.Channels;
 
 namespace ProcessKit;
 
@@ -52,7 +51,7 @@ static class PipePumpHelpers
 
 	internal static async Task PumpLinesAsync(
 		TextReader reader,
-		ChannelWriter<string> writer,
+		ILineBuffer buffer,
 		Action<string>? handler,
 		Action incrementCounter,
 		CancellationToken cancellationToken)
@@ -86,6 +85,9 @@ static class PipePumpHelpers
 				if (line is null)
 					break;
 
+				// Increment BEFORE buffering so the line counter reflects every line read off the
+				// pipe even when a bounded buffer drops it — lets a caller detect loss (count >
+				// lines received).
 				incrementCounter();
 				try
 				{
@@ -96,135 +98,30 @@ static class PipePumpHelpers
 					 // ignored - user handler must not break the pump
 				}
 
-				if (!writer.TryWrite(line))
-				{
-					// Channel is unbounded so TryWrite should always succeed; this only happens
-					// if the channel was completed early (e.g. dispose race) — drop quietly.
-					break;
-				}
+				// Never blocks: unbounded always accepts; bounded silently drops per its policy. The
+				// pump must keep draining the OS pipe regardless, or the child could deadlock.
+				buffer.Write(line);
 			}
 		}
 		finally
 		{
-			writer.TryComplete();
-		}
-	}
-
-	internal static async Task ReadIntoBufferAsync(
-		TextReader reader,
-		StringBuilder buffer,
-		Action<string>? handler,
-		CancellationToken cancellationToken)
-	{
-		while (true)
-		{
-			string? line;
-			try
-			{
-				line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-			}
-			catch (SystemException e) when (e
-				is OperationCanceledException
-				or IOException
-				or ObjectDisposedException)
-			{
-				break;
-			}
-
-
-			if (line is null)
-				break;
-
-			try
-			{
-				handler?.Invoke(line);
-			}
-			catch
-			{
-				// ignored - user handler must not break the pump; we still want to capture the output in the buffer even if the handler fails.
-			}
-
-			if (buffer.Length > 0)
-				buffer.AppendLine();
-			buffer.Append(line);
+			buffer.Complete();
 		}
 	}
 
 	internal static async Task WriteStandardInputAsync(
-		Process process,
+		IProcessHandle handle,
 		StandardInput? input,
 		CancellationToken cancellationToken)
 	{
-		var stdin = process.StandardInput.BaseStream;
+		var stdin = handle.StandardInput.BaseStream;
 		try
 		{
-			switch (input)
-			{
-				case null:
-				case StandardInput.EmptyInput:
-					// No input — fall through to the finally, which closes stdin so the child sees
-					// EOF immediately. stdin is always redirected (see PrepareStartInfo).
-					break;
-				case StandardInput.StringInput s:
-				{
-					var bytes = s.Encoding.GetBytes(s.Text);
-					await stdin.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-					break;
-				}
-				case StandardInput.BytesInput b:
-				{
-					await stdin.WriteAsync(b.Bytes, cancellationToken).ConfigureAwait(false);
-					break;
-				}
-				case StandardInput.StreamInput streamInput:
-				{
-					try
-					{
-						await streamInput.Stream.CopyToAsync(stdin, cancellationToken).ConfigureAwait(false);
-					}
-					finally
-					{
-						if (!streamInput.LeaveOpen)
-							await streamInput.Stream.DisposeAsync().ConfigureAwait(false);
-					}
-					break;
-				}
-				case StandardInput.LinesInput lines:
-				{
-					var newline = lines.Encoding.GetBytes(Environment.NewLine);
-					await foreach (var line in lines.Lines.WithCancellation(cancellationToken).ConfigureAwait(false))
-					{
-						var bytes = lines.Encoding.GetBytes(line);
-						await stdin.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-						await stdin.WriteAsync(newline, cancellationToken).ConfigureAwait(false);
-					}
-					break;
-				}
-				case StandardInput.EnumerableInput enumerable:
-				{
-					var newline = enumerable.Encoding.GetBytes(Environment.NewLine);
-					foreach (var line in enumerable.Lines)
-					{
-						cancellationToken.ThrowIfCancellationRequested();
-						var bytes = enumerable.Encoding.GetBytes(line);
-						await stdin.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-						await stdin.WriteAsync(newline, cancellationToken).ConfigureAwait(false);
-					}
-					break;
-				}
-				case StandardInput.FileInput file:
-				{
-					await using var fs = new FileStream(
-						file.Path,
-						FileMode.Open,
-						FileAccess.Read,
-						FileShare.Read,
-						bufferSize: 4096,
-						useAsync: true);
-					await fs.CopyToAsync(stdin, cancellationToken).ConfigureAwait(false);
-					break;
-				}
-			}
+			// Polymorphic dispatch — each StandardInput subtype knows how to pump itself.
+			// null and StandardInput.Empty both write nothing (the base no-op), then the finally
+			// closes stdin so the child sees EOF immediately. stdin is always redirected (see
+			// PrepareStartInfo).
+			await (input ?? StandardInput.Empty).WriteToAsync(stdin, cancellationToken).ConfigureAwait(false);
 		}
 		catch (OperationCanceledException)
 		{
@@ -249,7 +146,7 @@ static class PipePumpHelpers
 		{
 			try
 			{
-				process.StandardInput.Close();
+				handle.StandardInput.Close();
 			}
 			catch
 			{
