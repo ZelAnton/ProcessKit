@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+-
+
+### Changed
+-
+
+### Fixed
+-
+
+## [1.3.0] - 2026-05-31
+
+### Added
 - `ProcessRunOptions.OutputBuffer` (`OutputBufferPolicy` with `OutputOverflowMode`) caps how many unconsumed stdout/stderr lines are buffered, with a non-blocking drop-oldest/drop-newest policy — closing the OOM risk on chatty processes whose output is never consumed.
 - `IRunningProcess.ToResultAsync(...)` extension drains an already-started handle into a `ProcessResult<string>`.
 - `IRunningProcess.CompletionOrThrowAsync(...)` extension awaits the exit code but throws `TimeoutException` when the process was killed by `ProcessRunOptions.Timeout`.
@@ -72,7 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rename package to `ProcessKit`, namespace to `ProcessKit`; publish to NuGet.org under MIT licence
 
-[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/ZelAnton/ProcessKit/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.0.0...v1.1.0
