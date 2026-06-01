@@ -17,12 +17,26 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+# Default every job to zero token scopes; the release job opts back into exactly what it needs.
+permissions: {}
+
 jobs:
   release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Preflight — verify required secrets
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NUGET_API_KEY:-}" ]]; then
+            echo "::error::Required secret NUGET_API_KEY is not set. Aborting before any tag push, build, or publish."
+            exit 1
+          fi
+          echo "Required secrets present."
+
       - uses: actions/checkout@v4
         with:
           ref: main
@@ -37,7 +51,10 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          LATEST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          # Pipe-free on purpose: `git tag ... | head -n1` can SIGPIPE git (exit 141) once the
+          # tag list outgrows the pipe buffer, and `pipefail` would surface that as a release-
+          # blocking failure. `for-each-ref` does the sort+limit inside git, no pipe.
+          LATEST_TAG=$(git for-each-ref --sort=-v:refname --count=1 --format='%(refname:strip=2)' 'refs/tags/v[0-9]*.[0-9]*.[0-9]*')
           if [[ -n "$LATEST_TAG" ]]; then
             CURRENT="${LATEST_TAG#v}"
             echo "Latest release tag: $LATEST_TAG → current=$CURRENT"
@@ -203,8 +220,31 @@ jobs:
           sha256sum "${files[@]}" > SHA256SUMS
           cat SHA256SUMS
 
+      # ── PIVOT: the one irreversible step. Everything before is reversible (nothing left the
+      #    runner / VCS); everything after is idempotent + retried so it can never strand this
+      #    published version. --skip-duplicate makes "this exact version is already on NuGet" a
+      #    success (narrow, registry-specific) — so a re-run after a prior run published but failed
+      #    later simply moves on. Retries cover transient registry/network failures.
       - name: Push to NuGet.org
-        run: dotnet nuget push "./artifacts/*.nupkg" --source "https://api.nuget.org/v3/index.json" --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if dotnet nuget push "./artifacts/*.nupkg" \
+                --source "https://api.nuget.org/v3/index.json" \
+                --api-key "$NUGET_API_KEY" \
+                --skip-duplicate; then
+              echo "Publish succeeded (attempt $attempt)."
+              exit 0
+            fi
+            if [[ $attempt -lt 3 ]]; then
+              echo "::warning::nuget push attempt $attempt failed; retrying in $((attempt * 10))s..."
+              sleep "$((attempt * 10))"
+            fi
+          done
+          echo "::error::nuget push failed after 3 attempts. Nothing was tagged or released; re-run the workflow (the version is derived from tags, which have not advanced)."
+          exit 1
 
       - name: Bump version in csproj
         run: sed -i -E "s|<Version>[^<]+</Version>|<Version>${{ steps.version.outputs.version }}</Version>|" src/ProcessKit/ProcessKit.csproj
@@ -256,24 +296,104 @@ jobs:
           path.write_text(text)
           PY
 
+      # Post-pivot VCS bookkeeping. The push is --atomic (branch + tag advance together or not at all),
+      # so a failure here leaves the tag unpushed and a re-run is safe (same version recomputed, the
+      # already-published package is skipped by --skip-duplicate). Retried to avoid a needless re-run.
       - name: Commit, tag, push
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/ProcessKit/ProcessKit.csproj CHANGELOG.md
-          git commit -m "Release ${{ steps.version.outputs.tag }}"
-          git tag "${{ steps.version.outputs.tag }}"
-          git push --atomic origin HEAD:refs/heads/main "${{ steps.version.outputs.tag }}"
+          # Defensive: if the version/CHANGELOG steps were no-ops (already at target),
+          # `git commit` would abort on a clean tree under `set -e` AFTER the NuGet pivot.
+          # Tag HEAD regardless so the tag still advances.
+          if git diff --cached --quiet; then
+            echo "No file changes to commit; tagging existing HEAD."
+          else
+            git commit -m "Release $TAG"
+          fi
+          git tag "$TAG"
+          for attempt in 1 2 3; do
+            if push_output=$(git push --atomic origin HEAD:refs/heads/main "$TAG" 2>&1); then
+              echo "$push_output"
+              echo "Pushed commit + tag (attempt $attempt)."
+              exit 0
+            fi
+            echo "$push_output"
+            # Lost-response guard: a prior attempt may have landed server-side while the
+            # client saw a transient error. If the tag is already on origin it can only be
+            # from THIS run (Verify-tag-does-not-exist + the `release` concurrency group
+            # rule that out otherwise), so treat it as success rather than a false failure.
+            if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "refs/tags/$TAG"; then
+              echo "Tag $TAG is already on origin — a prior attempt succeeded. Treating as success."
+              exit 0
+            fi
+            # Branch-protection rejections are PERMANENT, not transient: retrying and the
+            # "re-run is safe" framing below would both mislead. Bail out immediately with
+            # an actionable message instead.
+            if echo "$push_output" | grep -qiE 'protected branch|hook declined|push declined|repository rule|GH006|GH013'; then
+              echo "::error::Push to main was REJECTED by branch protection — this is NOT transient, so retrying/re-running will not help."
+              echo "::error::The package IS already published to NuGet, but the release commit + tag $TAG were NOT pushed."
+              echo "::error::Grant github-actions[bot] a bypass on the 'main' ruleset/branch protection, and verify these rules don't block the bot: required status checks, required signed commits, required linear history, and tag protection on 'v*'."
+              echo "::error::Then push the commit + tag manually (git push --atomic origin HEAD:refs/heads/main $TAG), or re-run after fixing the bypass (version is derived from tags, which were not advanced)."
+              exit 1
+            fi
+            if [[ $attempt -lt 3 ]]; then
+              echo "::warning::atomic push attempt $attempt failed (treating as transient); retrying in $((attempt * 5))s..."
+              sleep "$((attempt * 5))"
+            fi
+          done
+          echo "::error::Failed to push commit + tag after 3 attempts (transient failures). The package is already published to NuGet; re-running the workflow is safe (version is derived from tags, which were not advanced)."
+          exit 1
 
-      - name: Create GitHub Release
+      # Final, fully reversible step — made idempotent ("exists → edit + re-upload, else create") and
+      # retried so a transient API blip never strands an already-published+tagged release. If it still
+      # fails, the error is explicit: finish by hand, do NOT re-run the workflow (a re-run would read
+      # the now-pushed tag, bump to the next version, and orphan this release).
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           shopt -s nullglob
           assets=(./artifacts/*.nupkg ./artifacts/*.snupkg ./artifacts/SHA256SUMS)
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "${{ steps.version.outputs.tag }}" \
-            --notes-file release-notes.md \
-            "${assets[@]}"
+          # The .nupkg glob vanishes under nullglob if Pack produced nothing; guard so a
+          # broken build can never publish a silent asset-less release.
+          nupkgs=(./artifacts/*.nupkg)
+          if [[ ${#nupkgs[@]} -eq 0 ]]; then
+            echo "::error::No .nupkg found in ./artifacts to attach to release $TAG."
+            exit 1
+          fi
+
+          # `|| return 1` on every command: a function used as an `if` condition runs with
+          # `set -e` DISABLED, so without these an early `gh release edit` failure would be
+          # masked by a later succeeding command and silently skip the retry.
+          publish_release() {
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Release $TAG already exists; updating notes and (re)uploading assets."
+              gh release edit "$TAG" --title "$TAG" --notes-file release-notes.md || return 1
+              gh release upload "$TAG" "${assets[@]}" --clobber || return 1
+            else
+              gh release create "$TAG" --title "$TAG" --notes-file release-notes.md "${assets[@]}" || return 1
+            fi
+          }
+
+          for attempt in 1 2 3; do
+            if publish_release; then
+              echo "GitHub Release $TAG published (attempt $attempt)."
+              exit 0
+            fi
+            if [[ $attempt -lt 3 ]]; then
+              echo "::warning::GitHub Release attempt $attempt failed; retrying in $((attempt * 10))s..."
+              sleep "$((attempt * 10))"
+            fi
+          done
+
+          echo "::error::Failed to create/update the GitHub Release for $TAG after 3 attempts."
+          echo "::error::The package IS published to NuGet and the tag IS pushed — only the release page is missing."
+          echo "::error::Finish MANUALLY (e.g. gh release create $TAG --notes-file release-notes.md ./artifacts/*). Do NOT re-run this workflow: it would bump to the next version and orphan $TAG."
+          exit 1
