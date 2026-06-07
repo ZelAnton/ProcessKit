@@ -193,6 +193,15 @@ public sealed record Command
 
 	public Command WithKeepStandardInputOpen() => this with { KeepStandardInputOpen = true };
 
+	/// <summary>Pipes this command's stdout into <paramref name="next"/>'s stdin, creating a
+	/// two-stage <see cref="ProcessPipeline"/>. Chain further stages via
+	/// <see cref="ProcessPipeline.Pipe"/>. Matches Rust <c>Command::pipe</c>.</summary>
+	public ProcessPipeline Pipe(Command next)
+	{
+		ArgumentNullException.ThrowIfNull(next);
+		return new ProcessPipeline { Stages = [this, next] };
+	}
+
 	// --- Terminal verbs ---------------------------------------------------------------------
 
 	/// <summary>Spawns the process and returns a live handle. Caller is responsible for awaiting

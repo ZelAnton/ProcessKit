@@ -37,6 +37,16 @@ namespace ProcessKit.Diagnostics;
 ///       does NOT kill the child.
 ///     </description>
 ///   </item>
+///   <item>
+///     <description>
+///       <c>processkit.pipeline.run</c> — full lifecycle of a <see cref="ProcessPipeline"/>
+///       (shell-free <c>a | b | c</c>). Tags: <c>stage_count</c>, <c>timeout_ms</c>,
+///       <c>winner_index</c>, <c>winner_program</c>, <c>exit_code</c>, <c>timed_out</c>. Status
+///       flips to <see cref="ActivityStatusCode.Error"/> on timeout / cancellation. Inner stages
+///       do NOT emit their own <c>processkit.process.run</c> spans (the pipeline bypasses the
+///       per-stage session); per-stage timing is currently summarised at pipeline granularity.
+///     </description>
+///   </item>
 /// </list>
 /// <para>
 /// Tags never contain <c>argv</c> or environment variables — both can carry secrets. Callers

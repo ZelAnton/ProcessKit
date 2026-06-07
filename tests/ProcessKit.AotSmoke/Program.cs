@@ -135,6 +135,17 @@ await using (var slow = await Command.Create("/bin/sh").Args("-c", "sleep 5").St
 	}
 }
 
+// Phase 5 exercise: ProcessPipeline — verifies the shared-group + byte-level wiring + pipefail
+// path compiles cleanly under Native AOT.
+var pipelineOutput = await Command.Create("/bin/sh").Args("-c", "echo pipeline-aot")
+	.Pipe(Command.Create("cat"))
+	.RunAsync();
+if (pipelineOutput != "pipeline-aot")
+{
+	Console.Error.WriteLine($"AOT smoke FAIL: Pipeline.RunAsync returned '{pipelineOutput}'");
+	return 1;
+}
+
 // Dispose the group explicitly here so the processkit.group.shutdown span fires before we read
 // capturedActivities — the `using` declaration above would otherwise dispose after the check.
 group.Dispose();

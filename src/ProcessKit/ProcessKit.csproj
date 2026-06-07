@@ -6,7 +6,7 @@
 		<AssemblyName>ProcessKit</AssemblyName>
 
 		<PackageId>ProcessKit</PackageId>
-		<Version>1.7.0</Version>
+		<Version>1.8.0</Version>
 		<Authors>Anton Zhelezniakou</Authors>
 		<Copyright>Copyright (c) 2026 Anton Zhelezniakou</Copyright>
 		<Description>Cross-platform child process management for .NET. ProcessGroup guarantees children are killed when the parent exits — kernel Job Objects on Windows, POSIX process groups on Linux/macOS/FreeBSD. ProcessRunner adds an async-first command runner with line-by-line streaming, bulk capture, stdin piping, timeouts, cancellation, and runtime diagnostics. AOT-compatible.</Description>
