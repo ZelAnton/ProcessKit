@@ -115,6 +115,26 @@ await using (var probeProcess = ProcessRunner.Default.Start(
 	}
 }
 
+// Phase 4 exercise: Command fluent builder + WaitAnyAsync — verifies record/with-expressions,
+// fluent verbs, and the WhenAny race compile cleanly under Native AOT.
+var helloCmd = await Command.Create("/bin/sh").Args("-c", "echo command-aot").RunAsync();
+if (helloCmd != "command-aot")
+{
+	Console.Error.WriteLine($"AOT smoke FAIL: Command.RunAsync returned '{helloCmd}'");
+	return 1;
+}
+
+await using (var fast = await Command.Create("/bin/sh").Args("-c", "sleep 0.1").StartAsync())
+await using (var slow = await Command.Create("/bin/sh").Args("-c", "sleep 5").StartAsync())
+{
+	var (winnerIndex, _) = await new[] { fast, slow }.WaitAnyAsync();
+	if (winnerIndex != 0)
+	{
+		Console.Error.WriteLine($"AOT smoke FAIL: WaitAnyAsync winnerIndex={winnerIndex}, expected 0");
+		return 1;
+	}
+}
+
 // Dispose the group explicitly here so the processkit.group.shutdown span fires before we read
 // capturedActivities — the `using` declaration above would otherwise dispose after the check.
 group.Dispose();

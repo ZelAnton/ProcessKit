@@ -459,6 +459,69 @@ public static class ProcessRunnerExtensions
 	}
 
 	// ──────────────────────────────────────────────────────────────────────────────────────
+	// Wait-any race over a set of handles
+	// ──────────────────────────────────────────────────────────────────────────────────────
+
+	extension(IEnumerable<IRunningProcess> processes)
+	{
+		/// <summary>
+		/// Races the <see cref="IRunningProcess.Completion"/> task of every process and returns the
+		/// <em>index</em> of the first to finish (into the materialised sequence) plus its exit
+		/// code. The losing processes are not affected — their handles remain valid and can be
+		/// awaited, signalled, or disposed by the caller.
+		/// </summary>
+		/// <exception cref="ArgumentException">The sequence is empty.</exception>
+		/// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> fired
+		/// before any process finished.</exception>
+		public Task<(int Index, int ExitCode)> WaitAnyAsync(CancellationToken cancellationToken = default)
+			=> WaitAnyAsyncCore(processes, cancellationToken);
+	}
+
+	static async Task<(int Index, int ExitCode)> WaitAnyAsyncCore(
+		IEnumerable<IRunningProcess> processes,
+		CancellationToken cancellationToken)
+	{
+		ArgumentNullException.ThrowIfNull(processes);
+
+		var array = processes as IRunningProcess[] ?? [.. processes];
+		if (array.Length == 0)
+			throw new ArgumentException("WaitAnyAsync requires at least one process.", nameof(processes));
+
+		var completions = new Task<int>[array.Length];
+		for (var i = 0; i < array.Length; i++)
+			completions[i] = array[i].Completion;
+
+		// Honour cancellation: race a Task.Delay on the token alongside the completions. Losers
+		// (other completions, plus the cancel task once the deadline cancels it) remain pending —
+		// no observable side-effect on losing handles.
+		using var cancelTcs = new CancellationTokenSource();
+		using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancelTcs.Token, cancellationToken);
+		var cancelTask = Task.Delay(Timeout.InfiniteTimeSpan, linkedCts.Token);
+
+		await Task.WhenAny([.. completions, cancelTask]).ConfigureAwait(false);
+		cancelTcs.Cancel();  // unwind cancelTask so it doesn't outlive the method.
+
+		// Re-scan completions BEFORE deciding to surface cancellation: WhenAny may have picked the
+		// cancelTask while one or more Completion tasks were already finished (process exit raced
+		// with token cancel). Picking cancellation in that case would mask a valid winner — same
+		// shape as the Phase 3 WaitForLineAsync race fix.
+		for (var i = 0; i < completions.Length; i++)
+		{
+			if (!completions[i].IsCompleted)
+				continue;
+			// `await` (not `.Result`) so a Faulted or Canceled Completion rethrows its actual
+			// exception unwrapped — not a generic AggregateException.
+			var code = await completions[i].ConfigureAwait(false);
+			return (i, code);
+		}
+
+		cancellationToken.ThrowIfCancellationRequested();
+		// Unreachable: Task.WhenAny returned, but neither cancelTask fired nor any completion is
+		// completed. Defensive throw rather than infinite hang.
+		throw new InvalidOperationException("WaitAnyAsync did not observe a completing process or cancellation.");
+	}
+
+	// ──────────────────────────────────────────────────────────────────────────────────────
 
 	// The bulk helpers expose no stdin writer, so leaving stdin open would hang a stdin-reading
 	// child forever. Force KeepStandardInputOpen off — interactive stdin is only meaningful through

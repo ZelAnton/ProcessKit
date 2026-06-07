@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `Command` — fluent, immutable specification for a child process to run. Build via `Command.Create("...").Args(...).With*(...).On*(...)`, then call a terminal verb: `StartAsync` (live handle), `OutputStringAsync` / `OutputBytesAsync` (bulk capture), `ExitCodeAsync`, `ProbeAsync` (exit 0 → true, exit 1 → false, other → throws `ProcessExitException` — matches `git diff --quiet`-style semantics), `RunAsync` (require success + trim stdout), `FirstLineAsync`. Each verb optionally accepts an `IProcessRunner` for DI/test scenarios.
+- `Command.InheritEnvironment(params string[])` — allow-list semantics for environment inheritance. Clears the child's inherited environment at spawn time and re-populates only the named variables from the current process. Matches Rust `Command::inherit_env`.
+- `ProcessCancelledException` (derives from `OperationCanceledException`) — thrown by every `Command` verb when the `WithCancellation(token)` token fires. Distinct from `WithTimeout`-driven termination, which is captured in `ProcessResult<T>.WasTimedOut`. Existing `catch (OperationCanceledException)` blocks still catch it; callers that need the program name can catch the specific type.
+- `WaitAnyAsync(this IEnumerable<IRunningProcess>, CancellationToken)` — races the `Completion` task of every supplied handle and returns the first finisher's `(Index, ExitCode)`. Losers stay running and usable. Empty input throws `ArgumentException`; pre-cancelled token throws `OperationCanceledException`.
 - `ProcessNotReadyException` — thrown by readiness probes when their deadline elapses or the child exits before the probe's condition is satisfied. Distinct from `ProcessRunOptions.Timeout`-driven termination: a failed probe does NOT kill the child.
 - `IRunningProcess.WaitForLineAsync(Predicate<string>, TimeSpan, …)` — wait for the first stdout line matching a predicate. Delivered in parallel with the regular `StdOut` enumeration (tee, not consume): both consumers see the line. Only lines arriving AFTER the call subscribes are considered.
 - `IRunningProcess.WaitForAsync(Func<CancellationToken, Task<bool>>, TimeSpan, TimeSpan, …)` — generic poll until the async check returns true. Default poll interval is 50ms.
@@ -123,7 +127,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rename package to `ProcessKit`, namespace to `ProcessKit`; publish to NuGet.org under MIT licence
 
-[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.2...v1.4.0
