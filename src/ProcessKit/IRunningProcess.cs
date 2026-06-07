@@ -1,3 +1,5 @@
+using System.Net;
+
 namespace ProcessKit;
 
 /// <summary>
@@ -101,4 +103,46 @@ public interface IRunningProcess : IAsyncDisposable
 	/// caller-supplied cancellation token, use <c>await runningProcess.Completion.WaitAsync(ct)</c>.
 	/// </summary>
 	Task<int> Completion { get; }
+
+	/// <summary>
+	/// Waits for the first stdout line that satisfies <paramref name="match"/>. The matching line
+	/// is also delivered to any concurrent <see cref="StdOut"/> enumeration — both consumers see
+	/// it. Only lines that arrive AFTER this call has subscribed are considered.
+	/// </summary>
+	/// <param name="match">Predicate evaluated synchronously for every new stdout line.</param>
+	/// <param name="within">Probe deadline.</param>
+	/// <param name="cancellationToken">Cancels the wait. Does NOT kill the child.</param>
+	/// <returns>The first matching line.</returns>
+	/// <exception cref="ProcessNotReadyException">
+	/// No matching line arrived within <paramref name="within"/>, or the child exited first. The
+	/// child is NOT killed by this method.
+	/// </exception>
+	Task<string> WaitForLineAsync(Predicate<string> match, TimeSpan within, CancellationToken cancellationToken = default);
+
+	/// <summary>
+	/// Polls <paramref name="check"/> until it returns true. Default poll interval is 50ms; supply
+	/// a smaller value for faster response or a larger value to reduce overhead.
+	/// </summary>
+	/// <param name="check">Async check invoked at every poll tick.</param>
+	/// <param name="within">Probe deadline.</param>
+	/// <param name="poll">Polling interval. Use <c>default</c> for 50ms.</param>
+	/// <param name="cancellationToken">Cancels the wait. Does NOT kill the child.</param>
+	/// <exception cref="ProcessNotReadyException">
+	/// The check never returned true within <paramref name="within"/>, or the child exited first.
+	/// The child is NOT killed by this method.
+	/// </exception>
+	Task WaitForAsync(Func<CancellationToken, Task<bool>> check, TimeSpan within, TimeSpan poll = default, CancellationToken cancellationToken = default);
+
+	/// <summary>
+	/// Polls <paramref name="endpoint"/> by attempting TCP connections until one succeeds. Each
+	/// attempt is bounded at 1 second (or the remaining deadline, whichever is shorter).
+	/// </summary>
+	/// <param name="endpoint">The endpoint to probe.</param>
+	/// <param name="within">Probe deadline.</param>
+	/// <param name="cancellationToken">Cancels the wait. Does NOT kill the child.</param>
+	/// <exception cref="ProcessNotReadyException">
+	/// No successful connection within <paramref name="within"/>, or the child exited first. The
+	/// child is NOT killed by this method.
+	/// </exception>
+	Task WaitForPortAsync(IPEndPoint endpoint, TimeSpan within, CancellationToken cancellationToken = default);
 }

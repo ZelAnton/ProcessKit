@@ -100,6 +100,21 @@ await using (var phase2Group = new ProcessGroup())
 	}
 }
 
+// Phase 3 exercise: readiness probe via WaitForLineAsync — verifies the immutable subscriber
+// list + Activity span + Task race compile cleanly under Native AOT.
+await using (var probeProcess = ProcessRunner.Default.Start(
+	new ProcessStartInfo("/bin/sh", ["-c", "echo ready-marker"])))
+{
+	var line = await probeProcess.WaitForLineAsync(
+		l => l.Contains("ready-marker", StringComparison.Ordinal),
+		TimeSpan.FromSeconds(5));
+	if (!line.Contains("ready-marker", StringComparison.Ordinal))
+	{
+		Console.Error.WriteLine($"AOT smoke FAIL: probe returned '{line}'");
+		return 1;
+	}
+}
+
 // Dispose the group explicitly here so the processkit.group.shutdown span fires before we read
 // capturedActivities — the `using` declaration above would otherwise dispose after the check.
 group.Dispose();

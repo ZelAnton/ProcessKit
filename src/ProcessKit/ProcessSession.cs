@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text;
 using ProcessKit.Diagnostics;
@@ -29,6 +30,11 @@ sealed class ProcessSession : IAsyncDisposable
 	readonly Stopwatch _stopwatch;
 	readonly TimeSpan _pumpTeardownTimeout;
 	readonly Activity? _activity;
+	// CAS-updated immutable snapshot of stdout-line subscribers. The composite handler fed to the
+	// stdout pump reads it lock-free per line; SubscribeStdOutLine/RemoveStdOutLineSubscriber
+	// publish updates via Interlocked.CompareExchange. Used by Phase 3 readiness probes to tee
+	// without consuming the user's IRunningProcess.StdOut enumeration.
+	ImmutableArray<Action<string>> _stdOutLineSubscribers = ImmutableArray<Action<string>>.Empty;
 	int _stderrLineCount;
 	int _disposed;
 	int _exitedHandled;
@@ -52,6 +58,9 @@ sealed class ProcessSession : IAsyncDisposable
 	// InvalidOperationException, which would be a surprising failure mode for callers logging
 	// the PID after handle teardown.
 	public int Pid { get; }
+
+	/// <summary>The executable basename (used in diagnostic tags and exception messages).</summary>
+	public string Program { get; }
 
 	public DateTime StartTime { get; }
 
@@ -178,11 +187,11 @@ sealed class ProcessSession : IAsyncDisposable
 
 		// Start the process.run span BEFORE the handle factory runs. If Start throws, the catch
 		// stops it with Error status so the failure shows up in tracing instead of disappearing.
-		var program = Path.GetFileName(psi.FileName) ?? string.Empty;
+		Program = Path.GetFileName(psi.FileName) ?? string.Empty;
 		var activity = ProcessKitActivitySource.Source.StartActivity(
 			"processkit.process.run",
 			ActivityKind.Internal);
-		activity?.SetTag("program", program);
+		activity?.SetTag("program", Program);
 
 		try
 		{
@@ -203,7 +212,24 @@ sealed class ProcessSession : IAsyncDisposable
 			if (_handle.HasExited)
 				OnProcessExited(this, EventArgs.Empty);
 
-			StdOutPumpCompletion = _stdOutSink.PumpAsync(_handle.StandardOutput, options?.StandardOutputHandler, _killCts.Token);
+			// Compose user's StandardOutputHandler with the subscriber broadcast (Phase 3 tee). The
+			// pump fires this delegate per line BEFORE writing to the line buffer, so probes see
+			// every line in parallel with the user's `await foreach (var line in StdOut)`.
+			var userStdOutHandler = options?.StandardOutputHandler;
+			Action<string> compositeStdOutHandler = line =>
+			{
+				try
+				{
+					userStdOutHandler?.Invoke(line);
+				}
+				catch
+				{
+					// User handler must not derail the pump — same containment rule as
+					// PipePumpHelpers.PumpLinesAsync's existing try/catch around handler invocation.
+				}
+				DispatchStdOutLine(line);
+			};
+			StdOutPumpCompletion = _stdOutSink.PumpAsync(_handle.StandardOutput, compositeStdOutHandler, _killCts.Token);
 
 			StdErrPumpCompletion = _stdErrSink is not null
 				? _stdErrSink.PumpAsync(_handle.StandardError, options?.StandardErrorHandler, _killCts.Token)
@@ -229,7 +255,7 @@ sealed class ProcessSession : IAsyncDisposable
 			// Emit ProcessStarted only after all wiring has succeeded. This keeps the event stream
 			// balanced: any throw above unwinds without emitting Started, so subscribers never see a
 			// Started without a matching Exited (the Activity captures the failure with Error status).
-			ProcessKitEventSource.Log.ProcessStarted(Pid, program);
+			ProcessKitEventSource.Log.ProcessStarted(Pid, Program);
 		}
 		catch
 		{
@@ -377,6 +403,67 @@ sealed class ProcessSession : IAsyncDisposable
 		}
 
 		ProcessKitEventSource.Log.ProcessExited(Pid, code, hasExitCode, timedOut, durationMs);
+	}
+
+	void DispatchStdOutLine(string line)
+	{
+		// Volatile read of the immutable snapshot — lock-free, allocation-free per line.
+		var snapshot = _stdOutLineSubscribers;
+		foreach (var subscriber in snapshot)
+		{
+			try
+			{
+				subscriber(line);
+			}
+			catch
+			{
+				// Probe callback must not derail the pump. The probe sets a TaskCompletionSource —
+				// if its predicate throws, the probe will simply time out on its deadline.
+			}
+		}
+	}
+
+	/// <summary>
+	/// Registers a callback that receives every stdout line read by the pump, in addition to the
+	/// regular <see cref="IRunningProcess.StdOut"/> enumeration. Returns an <see cref="IDisposable"/>
+	/// that removes the callback. Used by Phase 3 readiness probes; safe to call from any thread.
+	/// </summary>
+	internal IDisposable SubscribeStdOutLine(Action<string> callback)
+	{
+		ArgumentNullException.ThrowIfNull(callback);
+
+		// CAS-add to the immutable snapshot. Concurrent subscribes serialise on the field.
+		while (true)
+		{
+			var current = _stdOutLineSubscribers;
+			var next = current.Add(callback);
+			if (ImmutableInterlocked.InterlockedCompareExchange(ref _stdOutLineSubscribers, next, current) == current)
+				return new StdOutLineSubscription(this, callback);
+		}
+	}
+
+	void RemoveStdOutLineSubscriber(Action<string> callback)
+	{
+		while (true)
+		{
+			var current = _stdOutLineSubscribers;
+			var next = current.Remove(callback);
+			if (next == current)
+				return;  // already removed (idempotent)
+			if (ImmutableInterlocked.InterlockedCompareExchange(ref _stdOutLineSubscribers, next, current) == current)
+				return;
+		}
+	}
+
+	sealed class StdOutLineSubscription(ProcessSession owner, Action<string> callback) : IDisposable
+	{
+		int _disposed;
+		public void Dispose()
+		{
+			if (Interlocked.Exchange(ref _disposed, 1) != 0)
+				return;
+			owner.RemoveStdOutLineSubscriber(callback);
+		}
 	}
 
 	static DateTime SafeStartTime(IProcessHandle handle)

@@ -27,6 +27,16 @@ namespace ProcessKit.Diagnostics;
 ///       <c>escalated_to_kill</c>, <c>process_count</c> (snapshot taken before teardown).
 ///     </description>
 ///   </item>
+///   <item>
+///     <description>
+///       <c>processkit.probe.line</c> / <c>processkit.probe.custom</c> / <c>processkit.probe.port</c>
+///       — readiness probes on a running process. Tags: <c>program</c>, <c>within_ms</c>; the
+///       custom probe additionally carries <c>poll_ms</c>, the port probe carries <c>endpoint</c>.
+///       Status is <see cref="ActivityStatusCode.Error"/> when the probe fails (deadline elapsed
+///       or child exited first) — the failure throws <see cref="ProcessNotReadyException"/> and
+///       does NOT kill the child.
+///     </description>
+///   </item>
 /// </list>
 /// <para>
 /// Tags never contain <c>argv</c> or environment variables — both can carry secrets. Callers

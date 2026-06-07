@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `ProcessNotReadyException` — thrown by readiness probes when their deadline elapses or the child exits before the probe's condition is satisfied. Distinct from `ProcessRunOptions.Timeout`-driven termination: a failed probe does NOT kill the child.
+- `IRunningProcess.WaitForLineAsync(Predicate<string>, TimeSpan, …)` — wait for the first stdout line matching a predicate. Delivered in parallel with the regular `StdOut` enumeration (tee, not consume): both consumers see the line. Only lines arriving AFTER the call subscribes are considered.
+- `IRunningProcess.WaitForAsync(Func<CancellationToken, Task<bool>>, TimeSpan, TimeSpan, …)` — generic poll until the async check returns true. Default poll interval is 50ms.
+- `IRunningProcess.WaitForPortAsync(IPEndPoint, TimeSpan, …)` — TCP `ConnectAsync` retry until the endpoint accepts. Each attempt is bounded at 1 second (or the remaining deadline, whichever is shorter).
+- Activity spans `processkit.probe.line` / `processkit.probe.custom` / `processkit.probe.port`, tagged with `program`, `within_ms`, and (probe-specific) `poll_ms` or `endpoint`. Status flips to `Error` on `ProcessNotReadyException`.
 - `System.Diagnostics.Activity` instrumentation through `ProcessKitActivitySource` (source name `"ProcessKit"`, version `"1.4.0"`). Spans: `processkit.process.run` — full child-process lifecycle, tagged with `program` (executable basename), `pid`, `mechanism`, `exit_code`, `has_exit_code`, `timed_out`, `duration_ms`; `processkit.group.shutdown` — `ProcessGroup` teardown, tagged with `mechanism`, `escalated_to_kill`, `process_count`. Subscribe via `ActivityListener` or any OpenTelemetry exporter.
 - `ProcessKitEventSource` (event-source name `"ProcessKit"`) — structured events `ProcessStarted`, `ProcessExited`, `GroupShutdown`. Subscribe via `EventListener` or capture with `dotnet-trace collect --providers ProcessKit`. `argv` and environment variables are never recorded — both spans and events surface only program basename, ids, and outcome flags.
 - `Signal` enum (`Term`/`Kill`/`Int`/`Hup`/`Quit`/`Usr1`/`Usr2`) and `CustomSignal` record struct (raw POSIX number, Unix-only) — canonical signal vocabulary for `ProcessGroup.SignalAsync`.
@@ -118,7 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rename package to `ProcessKit`, namespace to `ProcessKit`; publish to NuGet.org under MIT licence
 
-[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.1...v1.3.2
