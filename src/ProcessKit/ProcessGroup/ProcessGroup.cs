@@ -33,7 +33,16 @@ public sealed class ProcessGroup : IDisposable, IAsyncDisposable
 
 		if (OperatingSystem.IsWindows())
 			return new WindowsJobObject(options);
-		if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+		if (OperatingSystem.IsLinux())
+		{
+			// Prefer cgroup v2 when mounted AND delegation is granted. Falls back to the POSIX
+			// process group transparently on hosts without delegation (no exception surface).
+			var cgroup = LinuxCgroupV2.TryCreate(options);
+			if (cgroup is not null)
+				return cgroup;
+			return new UnixProcessGroup(options);
+		}
+		if (OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
 			return new UnixProcessGroup(options);
 
 		throw new PlatformNotSupportedException(

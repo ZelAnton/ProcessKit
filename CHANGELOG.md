@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `LinuxCgroupV2` backend — on Linux hosts with cgroup v2 mounted and delegation enabled (root, container, or a systemd unit with `Delegate=yes`), `ProcessGroup` automatically uses a private cgroup v2 subgroup for kill-on-drop containment. Hosts without delegation transparently fall back to the POSIX process group (unchanged behaviour).
+- Atomic kill via `cgroup.kill` (kernel ≥ 5.14) — the whole subtree dies in one write, no SIGTERM grace window or escalation needed. On older kernels falls back to a per-process `SIGKILL` sweep and sets `EscalatedToKill = true` on the impl.
+- Atomic freeze via `cgroup.freeze` (kernel ≥ 5.2) — child processes adopted into a suspended cgroup freeze on attach (cgroup state, not per-process). On older kernels falls back to per-process `SIGSTOP` / `SIGCONT` broadcast.
+- cgroup v2 is escape-proof against `setsid()` — a runaway child can no longer detach into a new session and survive `ProcessGroup` teardown.
 - `RetryPolicy(int MaxAttempts, TimeSpan Backoff)` record with `BackoffFactor` (default 2.0), `MaxBackoff` (default uncapped), `Jitter` (default true), `RetryIf` (default null → retry on any non-cancellation exception). Arm via `Command.WithRetry(...)`. Only the success-checking verbs (`RunAsync` / `ExitCodeAsync` / `ProbeAsync`) honour it; the bulk verbs (`OutputStringAsync` / `OutputBytesAsync` / `FirstLineAsync`) return their result as data and never retry.
 - Cancellation is ALWAYS terminal — `ProcessCancelledException` / `OperationCanceledException` skips retry regardless of `RetryIf`, matching Rust's `Error::Cancelled` semantics.
 - `IClock` interface (`UtcNow` + `Delay(TimeSpan, CancellationToken)`) — seam for backoff testability. Production code uses an internal `SystemClock` implicitly via `Command` defaults; downstream code can inject custom clocks for testability of its own retry-wrapping code. Phase 10 (Supervisor) will reuse the seam.
@@ -37,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `ProcessKitEventSource` events: `GroupSignalled`, `GroupSuspended`, `GroupResumed`.
 
 ### Changed
+- **Breaking on Linux with cgroup v2 delegation**: `ProcessGroup.Mechanism` now reports `Mechanism.CgroupV2` (instead of `Mechanism.ProcessGroup`) and the `"mechanism"` activity tag on every span now reads `"CgroupV2"` (instead of `"ProcessGroup"`) when the host has cgroup v2 delegation granted. Downstream consumers parsing these values must update their switch / match arms. Hosts without delegation see no change (`Mechanism.ProcessGroup` as before).
 - The `mechanism` activity tag on `processkit.process.run` and `processkit.group.shutdown` now uses the canonical `Mechanism` enum string (`"JobObject"`/`"ProcessGroup"`/`"CgroupV2"`/`"None"`). Phase 1 emitted `"Pgroup"` for the POSIX path; consumers parsing the tag should switch to the enum names.
 
 ### Fixed
@@ -135,7 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rename package to `ProcessKit`, namespace to `ProcessKit`; publish to NuGet.org under MIT licence
 
-[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.9.0...v2.0.0
 [1.9.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.6.0...v1.7.0

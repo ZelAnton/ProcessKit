@@ -72,7 +72,7 @@ if (echoed != "interactive-aot")
 // Exercise the Phase 2 surface: Mechanism property, GetMembersAsync, SignalAsync (Term — on Unix the
 // child handles it gracefully; on Windows non-Kill throws, so use Kill there).
 var mechanism = group.Mechanism;
-if (mechanism is not (Mechanism.JobObject or Mechanism.ProcessGroup))
+if (mechanism is not (Mechanism.JobObject or Mechanism.ProcessGroup or Mechanism.CgroupV2))
 {
 	Console.Error.WriteLine($"AOT smoke FAIL: unexpected mechanism {mechanism}");
 	return 1;
