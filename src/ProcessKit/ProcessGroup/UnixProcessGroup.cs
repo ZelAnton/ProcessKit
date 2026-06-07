@@ -14,6 +14,9 @@ sealed class UnixProcessGroup : IProcessGroupImpl
 	readonly List<Process> _processes = [];
 	readonly ProcessGroupOptions _options;
 	int _pgid;
+	int _escalated;
+
+	public bool EscalatedToKill => Volatile.Read(ref _escalated) != 0;
 
 	public UnixProcessGroup(ProcessGroupOptions options)
 	{
@@ -142,7 +145,10 @@ sealed class UnixProcessGroup : IProcessGroupImpl
 				var remaining = timeout - Stopwatch.GetElapsedTime(start);
 				var remainingMs = remaining > TimeSpan.Zero ? (int)remaining.TotalMilliseconds : 0;
 				if (!process.HasExited && !process.WaitForExit(remainingMs) && _options.EscalateToKill)
+				{
 					process.Kill(entireProcessTree: true);
+					Interlocked.Exchange(ref _escalated, 1);
+				}
 			}
 			catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
 			{
@@ -188,7 +194,10 @@ sealed class UnixProcessGroup : IProcessGroupImpl
 				}
 
 				if (!process.HasExited && _options.EscalateToKill)
+				{
 					process.Kill(entireProcessTree: true);
+					Interlocked.Exchange(ref _escalated, 1);
+				}
 			}
 			catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
 			{

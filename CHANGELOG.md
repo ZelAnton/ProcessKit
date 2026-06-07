@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
--
+- `System.Diagnostics.Activity` instrumentation through `ProcessKitActivitySource` (source name `"ProcessKit"`, version `"1.4.0"`). Spans: `processkit.process.run` — full child-process lifecycle, tagged with `program` (executable basename), `pid`, `mechanism`, `exit_code`, `has_exit_code`, `timed_out`, `duration_ms`; `processkit.group.shutdown` — `ProcessGroup` teardown, tagged with `mechanism`, `escalated_to_kill`, `process_count`. Subscribe via `ActivityListener` or any OpenTelemetry exporter.
+- `ProcessKitEventSource` (event-source name `"ProcessKit"`) — structured events `ProcessStarted`, `ProcessExited`, `GroupShutdown`. Subscribe via `EventListener` or capture with `dotnet-trace collect --providers ProcessKit`. `argv` and environment variables are never recorded — both spans and events surface only program basename, ids, and outcome flags.
 
 ### Changed
 -
@@ -109,7 +110,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rename package to `ProcessKit`, namespace to `ProcessKit`; publish to NuGet.org under MIT licence
 
-[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.2...HEAD
+[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.2.0...v1.3.0

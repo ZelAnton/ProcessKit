@@ -60,6 +60,8 @@ sealed class WindowsJobObject : IProcessGroupImpl
 			throw new Win32Exception(Marshal.GetLastWin32Error());
 	}
 
+	public bool EscalatedToKill => false;
+
 	public ProcessGroupStats GetStats()
 	{
 		var accountingSize = (uint)Marshal.SizeOf<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>();

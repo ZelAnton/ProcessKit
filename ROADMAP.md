@@ -56,7 +56,7 @@ Each phase is a self-contained minor release with CI green on Windows/Linux/macO
 Standard .NET diagnostics so consumers can plug in OpenTelemetry / dotnet-trace / PerfView without code changes.
 
 - `ActivitySource("ProcessKit", "1.4.0")` with spans `processkit.process.run`, `processkit.group.shutdown`.
-- `EventSource("ProcessKit")` with `ProcessStarted`, `ProcessExited`, `GroupShutdown`, `LineRead` (verbose).
+- `EventSource("ProcessKit")` with `ProcessStarted`, `ProcessExited`, `GroupShutdown`. (A line-level event was scoped out — its high-volume verbose-channel value did not justify threading the pid + stream identifiers through every line-pump path. Revisit in a later phase if subscribers need it.)
 - Tags carry program name, pid, exit code, timed-out flag, mechanism, duration. `argv` and environment are deliberately omitted to avoid leaking secrets.
 
 Acceptance: an `ActivityListener` test captures the span with the expected tags; AOT smoke still emits events after publish.

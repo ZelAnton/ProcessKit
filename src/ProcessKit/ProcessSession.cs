@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using ProcessKit.Diagnostics;
 
 namespace ProcessKit;
 
@@ -27,9 +28,11 @@ sealed class ProcessSession : IAsyncDisposable
 	readonly CancellationTokenSource? _timeoutCts;
 	readonly Stopwatch _stopwatch;
 	readonly TimeSpan _pumpTeardownTimeout;
+	readonly Activity? _activity;
 	int _stderrLineCount;
 	int _disposed;
 	int _exitedHandled;
+	int _activityCompleted;
 	// Backing storage for Duration:
 	//   * `long` to give atomic 64-bit reads/writes on every platform via Interlocked.
 	//   * `-1` sentinel for "still running" — TimeSpan.Ticks is never negative.
@@ -173,12 +176,24 @@ sealed class ProcessSession : IAsyncDisposable
 		_exitedCts = new CancellationTokenSource();
 		_stopwatch = new Stopwatch();
 
+		// Start the process.run span BEFORE the handle factory runs. If Start throws, the catch
+		// stops it with Error status so the failure shows up in tracing instead of disappearing.
+		var program = Path.GetFileName(psi.FileName) ?? string.Empty;
+		var activity = ProcessKitActivitySource.Source.StartActivity(
+			"processkit.process.run",
+			ActivityKind.Internal);
+		activity?.SetTag("program", program);
+
 		try
 		{
 			_stopwatch.Start();
 			_handle = handleFactory.Start(_group, psi, _killCts.Token);
 			Pid = _handle.Id;
 			StartTime = SafeStartTime(_handle);
+
+			activity?.SetTag("pid", Pid);
+			activity?.SetTag("mechanism", _group.MechanismName);
+			_activity = activity;
 
 			_handle.EnableRaisingEvents = true;
 			_handle.Exited += OnProcessExited;
@@ -210,9 +225,20 @@ sealed class ProcessSession : IAsyncDisposable
 			{
 				_stdinTask = PipePumpHelpers.WriteStandardInputAsync(_handle, options?.StandardInput, _killCts.Token);
 			}
+
+			// Emit ProcessStarted only after all wiring has succeeded. This keeps the event stream
+			// balanced: any throw above unwinds without emitting Started, so subscribers never see a
+			// Started without a matching Exited (the Activity captures the failure with Error status).
+			ProcessKitEventSource.Log.ProcessStarted(Pid, program);
 		}
 		catch
 		{
+			if (activity is not null)
+			{
+				activity.SetStatus(ActivityStatusCode.Error, "start failed");
+				activity.Dispose();
+			}
+
 			if (_handle is not null)
 			{
 				// Unsubscribe so the Process delegate stops keeping this half-constructed instance alive
@@ -302,15 +328,18 @@ sealed class ProcessSession : IAsyncDisposable
 		}
 
 		int code;
+		bool hasExitCode;
 		try
 		{
 			code = _handle.ExitCode;
+			hasExitCode = true;
 		}
 		catch (InvalidOperationException)
 		{
 			// Process exited but ExitCode is inaccessible (e.g. on some platforms). The completion
 			// task's purpose is to signal exit; the precise code is best-effort here.
 			code = -1;
+			hasExitCode = false;
 		}
 
 		_completionTcs.TrySetResult(code);
@@ -322,6 +351,32 @@ sealed class ProcessSession : IAsyncDisposable
 		{
 			// ignored - already disposed, so pumps should be winding down or dead.
 		}
+
+		FinalizeActivityAndEvents(code, hasExitCode);
+	}
+
+	void FinalizeActivityAndEvents(int code, bool hasExitCode)
+	{
+		// Guard so the tags-and-dispose pair runs exactly once even if OnProcessExited is called
+		// from multiple paths (Process.Exited, ctor synchronous check, DisposeAsync fallback).
+		if (Interlocked.Exchange(ref _activityCompleted, 1) != 0)
+			return;
+
+		var durationMs = Duration?.Ticks is { } ticks ? ticks / TimeSpan.TicksPerMillisecond : 0L;
+		var timedOut = WasTimedOut;
+
+		if (_activity is not null)
+		{
+			_activity.SetTag("exit_code", code);
+			_activity.SetTag("has_exit_code", hasExitCode);
+			_activity.SetTag("timed_out", timedOut);
+			_activity.SetTag("duration_ms", durationMs);
+			if (timedOut)
+				_activity.SetStatus(ActivityStatusCode.Error, "timed out");
+			_activity.Dispose();
+		}
+
+		ProcessKitEventSource.Log.ProcessExited(Pid, code, hasExitCode, timedOut, durationMs);
 	}
 
 	static DateTime SafeStartTime(IProcessHandle handle)

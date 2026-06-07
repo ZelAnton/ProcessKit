@@ -8,4 +8,12 @@ interface IProcessGroupImpl : IDisposable, IAsyncDisposable
 	void Add(Process process);
 	void TerminateAll();
 	ProcessGroupStats GetStats();
+
+	/// <summary>
+	/// True after teardown if shutdown had to escalate from SIGTERM to SIGKILL. Always false on
+	/// Windows (Job Object terminates members atomically; there is no soft-signal grace window).
+	/// Read after <see cref="IDisposable.Dispose"/> / <see cref="IAsyncDisposable.DisposeAsync"/>;
+	/// undefined while still running.
+	/// </summary>
+	bool EscalatedToKill { get; }
 }

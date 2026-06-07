@@ -1,5 +1,18 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using ProcessKit;
+using ProcessKit.Diagnostics;
+
+// Listener for ProcessKitActivitySource — verifies that Activity instrumentation survives AOT
+// publish (the ActivitySource itself is BCL, but the source-name discovery and tag dispatch must
+// stay reachable). If we get zero stopped activities by the end, instrumentation regressed.
+var capturedActivities = 0;
+using var listener = new ActivityListener
+{
+	ShouldListenTo = src => src.Name == ProcessKitActivitySource.Name,
+	Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+	ActivityStopped = _ => Interlocked.Increment(ref capturedActivities),
+};
+ActivitySource.AddActivityListener(listener);
 
 using var group = new ProcessGroup();
 
@@ -56,7 +69,18 @@ if (echoed != "interactive-aot")
 	return 1;
 }
 
+// Dispose the group explicitly here so the processkit.group.shutdown span fires before we read
+// capturedActivities — the `using` declaration above would otherwise dispose after the check.
+group.Dispose();
+
+if (capturedActivities == 0)
+{
+	Console.Error.WriteLine("AOT smoke FAIL: no ProcessKit activities were captured — diagnostics regressed under AOT.");
+	return 1;
+}
+
 Console.WriteLine(
 	$"AOT smoke OK. exit={child.ExitCode} active={stats.ActiveProcessCount} " +
-	$"cpu={stats.TotalCpuTime} peakMem={stats.PeakMemoryBytes} runner='{runnerResult.StdOut.Trim()}'");
+	$"cpu={stats.TotalCpuTime} peakMem={stats.PeakMemoryBytes} runner='{runnerResult.StdOut.Trim()}' " +
+	$"activities={capturedActivities}");
 return 0;

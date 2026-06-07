@@ -24,6 +24,8 @@ sealed class FakeProcessGroupImpl : IProcessGroupImpl
 
 	public ProcessGroupStats StatsToReturn { get; init; } = new(7, TimeSpan.FromSeconds(1), 2048);
 
+	public bool EscalatedToKill { get; set; }
+
 	public Process StartAndAdd(ProcessStartInfo startInfo)
 	{
 		StartAndAddCount++;
