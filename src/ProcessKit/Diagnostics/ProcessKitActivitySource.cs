@@ -47,6 +47,17 @@ namespace ProcessKit.Diagnostics;
 ///       per-stage session); per-stage timing is currently summarised at pipeline granularity.
 ///     </description>
 ///   </item>
+///   <item>
+///     <description>
+///       <c>processkit.retry.attempt</c> — one span per attempt when a <see cref="Command"/>'s
+///       success-checking verb (<see cref="Command.RunAsync"/> / <see cref="Command.ExitCodeAsync"/>
+///       / <see cref="Command.ProbeAsync"/>) is configured via <see cref="Command.WithRetry"/>.
+///       Tags: <c>attempt</c> (1-based), <c>delay_ms_before</c>, <c>program</c>,
+///       <c>max_attempts</c>, <c>error_type</c> (on failure). Status flips to
+///       <see cref="ActivityStatusCode.Error"/> on per-attempt failure and "cancelled" on terminal
+///       cancellation.
+///     </description>
+///   </item>
 /// </list>
 /// <para>
 /// Tags never contain <c>argv</c> or environment variables — both can carry secrets. Callers

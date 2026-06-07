@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using ProcessKit.Diagnostics;
 
 namespace ProcessKit;
 
@@ -71,6 +72,16 @@ public sealed record Command
 	public bool CreateNoWindow { get; init; }
 
 	public bool KeepStandardInputOpen { get; init; }
+
+	/// <summary>Retry policy applied to success-checking verbs (<see cref="RunAsync"/>,
+	/// <see cref="ExitCodeAsync"/>, <see cref="ProbeAsync"/>). <c>null</c> means run once.</summary>
+	public RetryPolicy? RetryPolicy { get; init; }
+
+	/// <summary>Time abstraction used by the retry backoff loop. Defaults to
+	/// <see cref="SystemClock"/>; tests inject a virtual clock via
+	/// <c>command with { Clock = fakeClock }</c> through the <c>ProcessKit.Tests</c>
+	/// <see cref="System.Runtime.CompilerServices.InternalsVisibleToAttribute"/>.</summary>
+	internal IClock Clock { get; init; } = SystemClock.Instance;
 
 	/// <summary>Starts a new command targeting <paramref name="program"/>.</summary>
 	public static Command Create(string program)
@@ -193,6 +204,16 @@ public sealed record Command
 
 	public Command WithKeepStandardInputOpen() => this with { KeepStandardInputOpen = true };
 
+	/// <summary>Arms the retry policy. Only the success-checking verbs (<see cref="RunAsync"/>,
+	/// <see cref="ExitCodeAsync"/>, <see cref="ProbeAsync"/>) honour it; bulk verbs
+	/// (<see cref="OutputStringAsync"/>, <see cref="OutputBytesAsync"/>,
+	/// <see cref="FirstLineAsync"/>) return their result as data and never retry.</summary>
+	public Command WithRetry(RetryPolicy policy)
+	{
+		ArgumentNullException.ThrowIfNull(policy);
+		return this with { RetryPolicy = policy };
+	}
+
 	/// <summary>Pipes this command's stdout into <paramref name="next"/>'s stdin, creating a
 	/// two-stage <see cref="ProcessPipeline"/>. Chain further stages via
 	/// <see cref="ProcessPipeline.Pipe"/>. Matches Rust <c>Command::pipe</c>.</summary>
@@ -245,20 +266,22 @@ public sealed record Command
 		}
 	}
 
-	/// <summary>Returns the raw exit code. Output is discarded (memory-flat).</summary>
-	public async Task<int> ExitCodeAsync(IProcessRunner? runner = null)
-	{
-		try
+	/// <summary>Returns the raw exit code. Output is discarded (memory-flat). Honours
+	/// <see cref="RetryPolicy"/>.</summary>
+	public Task<int> ExitCodeAsync(IProcessRunner? runner = null) =>
+		RetryAsync(async () =>
 		{
-			return await (runner ?? ProcessRunner.Default)
-				.GetExitCodeAsync(BuildStartInfo(), BuildOptions(), Cancellation)
-				.ConfigureAwait(false);
-		}
-		catch (OperationCanceledException) when (Cancellation.IsCancellationRequested)
-		{
-			throw new ProcessCancelledException(Program, Cancellation);
-		}
-	}
+			try
+			{
+				return await (runner ?? ProcessRunner.Default)
+					.GetExitCodeAsync(BuildStartInfo(), BuildOptions(), Cancellation)
+					.ConfigureAwait(false);
+			}
+			catch (OperationCanceledException) when (Cancellation.IsCancellationRequested)
+			{
+				throw new ProcessCancelledException(Program, Cancellation);
+			}
+		});
 
 	/// <summary>Treats the process as a boolean check: exit 0 → <c>true</c>, exit 1 → <c>false</c>,
 	/// any other code throws <see cref="ProcessExitException"/>. Matches Rust
@@ -266,34 +289,36 @@ public sealed record Command
 	/// signal a genuine error. A timeout-kill is also treated as "genuine error" — the captured
 	/// exit code after a timeout kill is unreliable (often coincidentally 1 on Unix), so probing a
 	/// killed child would silently report a false "false".</summary>
-	public async Task<bool> ProbeAsync(IProcessRunner? runner = null)
-	{
-		var result = await OutputStringAsync(runner).ConfigureAwait(false);
-		if (result.WasTimedOut)
-			throw new ProcessExitException(
-				result.ExitCode,
-				result.StdErr,
-				$"`{Program}` probe was killed by its configured timeout; the exit code is unreliable in that case and probe semantics do not apply.");
-		return result.ExitCode switch
+	public Task<bool> ProbeAsync(IProcessRunner? runner = null) =>
+		RetryAsync(async () =>
 		{
-			0 => true,
-			1 => false,
-			_ => throw new ProcessExitException(
-				result.ExitCode,
-				result.StdErr,
-				$"`{Program}` probe expected exit 0 or 1, got {result.ExitCode}: {Truncate(result.StdErr, 4096)}"),
-		};
-	}
+			var result = await OutputStringAsync(runner).ConfigureAwait(false);
+			if (result.WasTimedOut)
+				throw new ProcessExitException(
+					result.ExitCode,
+					result.StdErr,
+					$"`{Program}` probe was killed by its configured timeout; the exit code is unreliable in that case and probe semantics do not apply.");
+			return result.ExitCode switch
+			{
+				0 => true,
+				1 => false,
+				_ => throw new ProcessExitException(
+					result.ExitCode,
+					result.StdErr,
+					$"`{Program}` probe expected exit 0 or 1, got {result.ExitCode}: {Truncate(result.StdErr, 4096)}"),
+			};
+		});
 
 	/// <summary>Requires the process to exit with code 0; returns stdout with its trailing newline
 	/// stripped (Rust <c>Command::run</c> semantics — leading/interior whitespace is preserved so
 	/// multi-line output round-trips faithfully).</summary>
-	public async Task<string> RunAsync(IProcessRunner? runner = null)
-	{
-		var result = await OutputStringAsync(runner).ConfigureAwait(false);
-		result.EnsureSuccess();
-		return result.StdOut.TrimEnd('\r', '\n');
-	}
+	public Task<string> RunAsync(IProcessRunner? runner = null) =>
+		RetryAsync(async () =>
+		{
+			var result = await OutputStringAsync(runner).ConfigureAwait(false);
+			result.EnsureSuccess();
+			return result.StdOut.TrimEnd('\r', '\n');
+		});
 
 	/// <summary>Returns the first stdout line that satisfies <paramref name="match"/> (or the very
 	/// first line when <paramref name="match"/> is <c>null</c>), or <c>null</c> if the process
@@ -363,6 +388,65 @@ public sealed record Command
 		ProcessGroup = ProcessGroup,
 		ProcessGroupOptions = ProcessGroupOptions,
 	};
+
+	async Task<T> RetryAsync<T>(Func<Task<T>> attempt)
+	{
+		// Fast path: no policy → one attempt, no allocation overhead.
+		if (RetryPolicy is null)
+			return await attempt().ConfigureAwait(false);
+
+		// Upfront guard: a one-shot StandardInput (FromStream / FromLines) cannot survive a retry —
+		// the second attempt would see empty stdin. Reject before the first attempt so callers fix
+		// their input source rather than discover the silent failure on a flaky-network day.
+		if (StandardInput is { IsReplayable: false })
+			throw new InvalidOperationException(
+				"Cannot retry with a one-shot StandardInput (FromStream / FromLines). Use FromString / FromBytes / FromFile / FromEnumerable for retried commands.");
+
+		var attemptNumber = 0;
+		while (true)
+		{
+			attemptNumber++;
+			var delay = attemptNumber == 1
+				? TimeSpan.Zero
+				: RetryPolicy.ComputeDelay(attemptNumber - 1);
+			if (delay > TimeSpan.Zero)
+				await Clock.Delay(delay, Cancellation).ConfigureAwait(false);
+
+			using var activity = ProcessKitActivitySource.Source.StartActivity(
+				"processkit.retry.attempt",
+				ActivityKind.Internal);
+			activity?.SetTag("attempt", attemptNumber);
+			activity?.SetTag("delay_ms_before", (long)delay.TotalMilliseconds);
+			activity?.SetTag("program", Path.GetFileName(Program));
+			activity?.SetTag("max_attempts", RetryPolicy.MaxAttempts);
+
+			try
+			{
+				var result = await attempt().ConfigureAwait(false);
+				activity?.SetStatus(ActivityStatusCode.Ok);
+				return result;
+			}
+			catch (OperationCanceledException)
+			{
+				// Cancellation is ALWAYS terminal — match Rust's Error::Cancelled semantics. Even
+				// a RetryIf that returns true for OCE is overridden: the token stays cancelled, so
+				// every retry would just refault on the next syscall.
+				activity?.SetStatus(ActivityStatusCode.Error, "cancelled");
+				throw;
+			}
+			catch (Exception ex)
+			{
+				activity?.SetTag("error_type", ex.GetType().Name);
+				activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+				var canRetry = attemptNumber < RetryPolicy.MaxAttempts
+					&& (RetryPolicy.RetryIf?.Invoke(ex) ?? DefaultRetryIf(ex));
+				if (!canRetry)
+					throw;
+			}
+		}
+
+		static bool DefaultRetryIf(Exception ex) => ex is not OperationCanceledException;
+	}
 
 	static string Truncate(string s, int max) =>
 		string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s[..max] + "…");

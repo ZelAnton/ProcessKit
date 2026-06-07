@@ -146,6 +146,18 @@ if (pipelineOutput != "pipeline-aot")
 	return 1;
 }
 
+// Phase 6 exercise: WithRetry — verifies the RetryPolicy + IClock + activity span emission
+// compiles cleanly under Native AOT. We pick a successful command + RetryIf=false so the retry
+// loop runs exactly one attempt; primary goal is AOT verification, not retry semantics.
+var retriedCommand = await Command.Create("/bin/sh").Args("-c", "exit 0")
+	.WithRetry(new RetryPolicy(2, TimeSpan.FromMilliseconds(50)) { RetryIf = _ => false })
+	.RunAsync();
+if (retriedCommand != string.Empty)
+{
+	Console.Error.WriteLine($"AOT smoke FAIL: Command.RunAsync with retry returned '{retriedCommand}', expected empty.");
+	return 1;
+}
+
 // Dispose the group explicitly here so the processkit.group.shutdown span fires before we read
 // capturedActivities — the `using` declaration above would otherwise dispose after the check.
 group.Dispose();

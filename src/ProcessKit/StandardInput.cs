@@ -18,6 +18,16 @@ public abstract class StandardInput
 	private protected StandardInput() { }
 
 	/// <summary>
+	/// True if this source can be replayed (re-pumped) for a retry attempt. Reusable factories
+	/// (<see cref="FromString"/>, <see cref="FromBytes"/>, <see cref="FromFile"/>,
+	/// <see cref="FromEnumerable"/>, <see cref="Empty"/>) return true; one-shot factories
+	/// (<see cref="FromStream"/>, <see cref="FromLines"/>) override to false. Used by
+	/// <see cref="Command.WithRetry"/> to reject incompatible inputs upfront — a second attempt
+	/// against a one-shot source would see empty stdin.
+	/// </summary>
+	internal virtual bool IsReplayable => true;
+
+	/// <summary>
 	/// Pumps this input source into <paramref name="destination"/> (the child's redirected stdin
 	/// base stream). Implementations must NOT close <paramref name="destination"/> — the runner
 	/// closes it in one place so the "stdin is closed at start" contract holds uniformly. The base
@@ -110,6 +120,11 @@ public abstract class StandardInput
 
 	internal sealed class StreamInput(Stream stream, bool leaveOpen) : StandardInput
 	{
+		// One-shot: a Stream's position advances after the first pump; we cannot reset it for a
+		// retry without knowing the source's seek semantics. Callers wanting retry must materialise
+		// to bytes via FromBytes/FromString/FromFile first.
+		internal override bool IsReplayable => false;
+
 		internal override async Task WriteToAsync(Stream destination, CancellationToken cancellationToken)
 		{
 			try
@@ -126,6 +141,11 @@ public abstract class StandardInput
 
 	internal sealed class LinesInput(IAsyncEnumerable<string> lines, Encoding encoding) : StandardInput
 	{
+		// One-shot: IAsyncEnumerable<T> has no contract for re-enumeration; many implementations
+		// produce a single iterator that's consumed by the first await foreach. Block retry to
+		// avoid silent empty-stdin on the second attempt.
+		internal override bool IsReplayable => false;
+
 		internal override async Task WriteToAsync(Stream destination, CancellationToken cancellationToken)
 		{
 			var newline = encoding.GetBytes(Environment.NewLine);

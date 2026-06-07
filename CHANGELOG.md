@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `RetryPolicy(int MaxAttempts, TimeSpan Backoff)` record with `BackoffFactor` (default 2.0), `MaxBackoff` (default uncapped), `Jitter` (default true), `RetryIf` (default null → retry on any non-cancellation exception). Arm via `Command.WithRetry(...)`. Only the success-checking verbs (`RunAsync` / `ExitCodeAsync` / `ProbeAsync`) honour it; the bulk verbs (`OutputStringAsync` / `OutputBytesAsync` / `FirstLineAsync`) return their result as data and never retry.
+- Cancellation is ALWAYS terminal — `ProcessCancelledException` / `OperationCanceledException` skips retry regardless of `RetryIf`, matching Rust's `Error::Cancelled` semantics.
+- `IClock` interface (`UtcNow` + `Delay(TimeSpan, CancellationToken)`) — seam for backoff testability. Production code uses an internal `SystemClock` implicitly via `Command` defaults; downstream code can inject custom clocks for testability of its own retry-wrapping code. Phase 10 (Supervisor) will reuse the seam.
+- One-shot `StandardInput` sources (`FromStream` / `FromLines`) are rejected with `InvalidOperationException` BEFORE the first attempt when paired with a `RetryPolicy` — the second attempt would see empty stdin. Use `FromString` / `FromBytes` / `FromFile` / `FromEnumerable` for retried commands.
+- Activity span `processkit.retry.attempt` per attempt — tags `attempt` (1-based), `delay_ms_before`, `program`, `max_attempts`, `error_type` (on failure). Status flips to `Error` on per-attempt failure and "cancelled" on terminal cancellation.
 - `ProcessPipeline` — shell-free `a | b | c` chains. Build via `Command.Pipe(Command next)`, then `.Pipe(...).Pipe(...).WithTimeout(...).WithCancellation(...)`. Terminal verbs: `OutputStringAsync` (full result with pipefail attribution) and `RunAsync` (EnsureSuccess + trimmed stdout). Each stage is an independent OS process; stdout of stage N is copied to stdin of stage N+1 byte-for-byte (no shell quoting or injection surface). All stages live inside one private `ProcessGroup`, so kill-on-dispose tears the whole chain down atomically.
 - Pipeline pipefail semantics — the first inner stage with `ExitCode != 0` attributes the result's `ExitCode` and `StdErr`; otherwise the last stage. Stdout always comes from the last stage. `WithTimeout` triggers a `terminate_all`-equivalent disposal and returns `ProcessResult<string> { WasTimedOut = true }`.
 - Activity span `processkit.pipeline.run` with tags `stage_count`, `timeout_ms`, `winner_index`, `winner_program`, `exit_code`, `timed_out`. Status flips to `Error` on timeout / cancellation.
@@ -130,7 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rename package to `ProcessKit`, namespace to `ProcessKit`; publish to NuGet.org under MIT licence
 
-[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.5.0...v1.6.0
