@@ -81,7 +81,7 @@ public sealed class ProcessGroup
 }
 ```
 
-Windows uses `TerminateJobObject` for `Signal.Kill`, `NtSuspendProcess/NtResumeProcess` for suspend/resume, `JobObjectBasicProcessIdList` for members, `AssignProcessToJobObject` for adopt. Non-Kill signals on Windows throw `PlatformNotSupportedException`. Unix uses `killpg`, `SIGSTOP/SIGCONT`, `/proc/<pid>/stat` scan (Linux), or `sysctl(KERN_PROC_PGRP)` (macOS). All P/Invoke goes through `[LibraryImport]`.
+Windows uses `TerminateJobObject` for `Signal.Kill`, per-thread `SuspendThread`/`ResumeThread` via a `Toolhelp32` snapshot for suspend/resume (per-thread suspend counts stack — matches Rust v0.7.1, documented API), `JobObjectBasicProcessIdList` for members, `AssignProcessToJobObject` for adopt. Non-Kill signals on Windows throw `PlatformNotSupportedException`. Unix uses `killpg`, `SIGSTOP/SIGCONT`, and a snapshot of tracked processes for `GetMembersAsync` (Phase 7 will swap the Linux side over to `cgroup.procs`). All P/Invoke goes through `[LibraryImport]`.
 
 ### Phase 3 — v1.6.0 · Readiness probes
 Wait for a child to become ready without killing it on timeout.

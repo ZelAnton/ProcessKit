@@ -192,7 +192,7 @@ sealed class ProcessSession : IAsyncDisposable
 			StartTime = SafeStartTime(_handle);
 
 			activity?.SetTag("pid", Pid);
-			activity?.SetTag("mechanism", _group.MechanismName);
+			activity?.SetTag("mechanism", _group.Mechanism.ToString());
 			_activity = activity;
 
 			_handle.EnableRaisingEvents = true;

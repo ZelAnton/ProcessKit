@@ -74,9 +74,9 @@ public sealed class ProcessKitEventSource : EventSource
 
 	/// <summary>
 	/// Fired once per <see cref="ProcessGroup"/> teardown. <paramref name="mechanism"/> is one of
-	/// <c>"JobObject"</c>, <c>"Pgroup"</c>, <c>"None"</c>. <paramref name="escalated"/> indicates
-	/// SIGKILL escalation on Unix; on Windows it is always <c>false</c> because the Job Object
-	/// terminates members atomically.
+	/// <c>"JobObject"</c>, <c>"ProcessGroup"</c>, <c>"CgroupV2"</c>, <c>"None"</c>.
+	/// <paramref name="escalated"/> indicates SIGKILL escalation on Unix; on Windows it is always
+	/// <c>false</c> because the Job Object terminates members atomically.
 	/// </summary>
 	[Event(3, Level = EventLevel.Informational)]
 	public void GroupShutdown(string mechanism, bool escalated, int processCount)
@@ -84,5 +84,52 @@ public sealed class ProcessKitEventSource : EventSource
 		// Matches the strongly-typed WriteEvent(int, string, int, int) overload — AOT-safe.
 		if (IsEnabled())
 			WriteEvent(3, mechanism, escalated ? 1 : 0, processCount);
+	}
+
+	/// <summary>Fired once per successful <see cref="ProcessGroup.SignalAsync(Signal, System.Threading.CancellationToken)"/>
+	/// or <see cref="ProcessGroup.SignalAsync(CustomSignal, System.Threading.CancellationToken)"/>
+	/// call. <paramref name="signal"/> is the canonical name (<c>"Term"</c>, <c>"Kill"</c>, …) or
+	/// <c>"Custom(N)"</c> for raw POSIX numbers.</summary>
+	[Event(4, Level = EventLevel.Informational)]
+	[UnconditionalSuppressMessage("Trimming", "IL2026",
+		Justification = "All payload arguments are primitive types (UTF-16 strings + int) marshalled directly via EventData* without object-graph serialisation.")]
+	public unsafe void GroupSignalled(string mechanism, string signal, int processCount)
+	{
+		// No strongly-typed WriteEvent overload accepts (int, string, string, int); the params
+		// object[] fall-back is reflection-driven and AOT-unsafe. Marshal the EventData payload by
+		// hand via WriteEventCore, matching Phase 1's ProcessExited pattern.
+		if (!IsEnabled())
+			return;
+
+		fixed (char* mechanismChars = mechanism)
+		fixed (char* signalChars = signal)
+		{
+			var data = stackalloc EventData[3];
+			data[0].DataPointer = (nint)mechanismChars;
+			data[0].Size = (mechanism.Length + 1) * sizeof(char);
+			data[1].DataPointer = (nint)signalChars;
+			data[1].Size = (signal.Length + 1) * sizeof(char);
+			data[2].DataPointer = (nint)(&processCount);
+			data[2].Size = sizeof(int);
+			WriteEventCore(4, 3, data);
+		}
+	}
+
+	/// <summary>Fired once per successful <see cref="ProcessGroup.SuspendAsync"/> call.</summary>
+	[Event(5, Level = EventLevel.Informational)]
+	public void GroupSuspended(string mechanism, int processCount)
+	{
+		// Matches strongly-typed WriteEvent(int, string, int) overload — AOT-safe.
+		if (IsEnabled())
+			WriteEvent(5, mechanism, processCount);
+	}
+
+	/// <summary>Fired once per successful <see cref="ProcessGroup.ResumeAsync"/> call.</summary>
+	[Event(6, Level = EventLevel.Informational)]
+	public void GroupResumed(string mechanism, int processCount)
+	{
+		// Matches strongly-typed WriteEvent(int, string, int) overload — AOT-safe.
+		if (IsEnabled())
+			WriteEvent(6, mechanism, processCount);
 	}
 }

@@ -10,9 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `System.Diagnostics.Activity` instrumentation through `ProcessKitActivitySource` (source name `"ProcessKit"`, version `"1.4.0"`). Spans: `processkit.process.run` — full child-process lifecycle, tagged with `program` (executable basename), `pid`, `mechanism`, `exit_code`, `has_exit_code`, `timed_out`, `duration_ms`; `processkit.group.shutdown` — `ProcessGroup` teardown, tagged with `mechanism`, `escalated_to_kill`, `process_count`. Subscribe via `ActivityListener` or any OpenTelemetry exporter.
 - `ProcessKitEventSource` (event-source name `"ProcessKit"`) — structured events `ProcessStarted`, `ProcessExited`, `GroupShutdown`. Subscribe via `EventListener` or capture with `dotnet-trace collect --providers ProcessKit`. `argv` and environment variables are never recorded — both spans and events surface only program basename, ids, and outcome flags.
+- `Signal` enum (`Term`/`Kill`/`Int`/`Hup`/`Quit`/`Usr1`/`Usr2`) and `CustomSignal` record struct (raw POSIX number, Unix-only) — canonical signal vocabulary for `ProcessGroup.SignalAsync`.
+- `Mechanism` enum (`JobObject`/`ProcessGroup`/`CgroupV2`/`None`) and `ProcessGroup.Mechanism` property — observe which kernel containment is in use on the current host. `CgroupV2` is reserved for the Linux cgroup-v2 backend landing in a later phase.
+- `ProcessGroup.SignalAsync(Signal, …)` / `SignalAsync(CustomSignal, …)` — deliver a signal to every member. Windows honors only `Signal.Kill` (maps to `TerminateJobObject`); any other variant throws `PlatformNotSupportedException`. Unix broadcasts via `killpg(-pgid, sig)` with per-process fallback.
+- `ProcessGroup.SuspendAsync(…)` / `ResumeAsync(…)` — pause/unpause every member. Unix: `SIGSTOP`/`SIGCONT`. Windows: `SuspendThread`/`ResumeThread` per thread of every Job Object member via a `Toolhelp32` snapshot (per-thread suspend counts stack — pair each suspend with a resume).
+- `ProcessGroup.GetMembersAsync(…)` — snapshot of live member PIDs. Windows queries `JobObjectBasicProcessIdList` (full tree); Unix returns tracked, not-yet-exited processes.
+- `ProcessGroup.AdoptAsync(Process, …)` — async, observed synonym for `Add(Process)`. Brings an externally-started process under the group's containment with an activity span and structured event.
+- New activity spans `processkit.group.signal`, `processkit.group.suspend`, `processkit.group.resume`, `processkit.group.adopt` (tagged `mechanism`, `process_count`; signal also carries `signal`; adopt also carries `pid`).
+- New `ProcessKitEventSource` events: `GroupSignalled`, `GroupSuspended`, `GroupResumed`.
 
 ### Changed
--
+- The `mechanism` activity tag on `processkit.process.run` and `processkit.group.shutdown` now uses the canonical `Mechanism` enum string (`"JobObject"`/`"ProcessGroup"`/`"CgroupV2"`/`"None"`). Phase 1 emitted `"Pgroup"` for the POSIX path; consumers parsing the tag should switch to the enum names.
 
 ### Fixed
 -
@@ -110,7 +118,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rename package to `ProcessKit`, namespace to `ProcessKit`; publish to NuGet.org under MIT licence
 
-[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/ZelAnton/ProcessKit/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/ZelAnton/ProcessKit/compare/v1.3.0...v1.3.1

@@ -11,10 +11,27 @@ static partial class Kernel32
 {
 	internal const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
 
+	internal const uint TH32CS_SNAPTHREAD = 0x4;
+	internal const uint THREAD_SUSPEND_RESUME = 0x2;
+	internal const int ERROR_MORE_DATA = 234;
+
 	internal enum JobObjectInfoClass
 	{
 		BasicAccountingInformation = 1,
+		BasicProcessIdList = 3,
 		ExtendedLimitInformation = 9,
+	}
+
+	[StructLayout(LayoutKind.Sequential)]
+	internal struct THREADENTRY32
+	{
+		public uint dwSize;
+		public uint cntUsage;
+		public uint th32ThreadID;
+		public uint th32OwnerProcessID;
+		public int tpBasePri;
+		public int tpDeltaPri;
+		public uint dwFlags;
 	}
 
 	[StructLayout(LayoutKind.Sequential)]
@@ -102,4 +119,38 @@ static partial class Kernel32
 	[LibraryImport("kernel32.dll", SetLastError = true)]
 	[return: MarshalAs(UnmanagedType.Bool)]
 	internal static partial bool TerminateJobObject(SafeFileHandle hJob, uint uExitCode);
+
+	// Variable-size payload (header followed by N ProcessIdList[]); the caller passes a raw buffer
+	// and re-tries on ERROR_MORE_DATA. Kept as nint to avoid struct marshalling for the tail.
+	[LibraryImport("kernel32.dll", EntryPoint = "QueryInformationJobObject", SetLastError = true)]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	internal static partial bool QueryJobMembers(
+		SafeFileHandle hJob,
+		JobObjectInfoClass infoClass,
+		nint lpJobObjectInformation,
+		uint cbJobObjectInformationLength,
+		out uint lpReturnLength);
+
+	[LibraryImport("kernel32.dll", SetLastError = true)]
+	internal static partial SafeFileHandle CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+	[LibraryImport("kernel32.dll", SetLastError = true)]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	internal static partial bool Thread32First(SafeFileHandle hSnapshot, ref THREADENTRY32 lpte);
+
+	[LibraryImport("kernel32.dll", SetLastError = true)]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	internal static partial bool Thread32Next(SafeFileHandle hSnapshot, ref THREADENTRY32 lpte);
+
+	[LibraryImport("kernel32.dll", SetLastError = true)]
+	internal static partial SafeFileHandle OpenThread(
+		uint dwDesiredAccess,
+		[MarshalAs(UnmanagedType.Bool)] bool bInheritHandle,
+		uint dwThreadId);
+
+	[LibraryImport("kernel32.dll", SetLastError = true)]
+	internal static partial uint SuspendThread(SafeFileHandle hThread);
+
+	[LibraryImport("kernel32.dll", SetLastError = true)]
+	internal static partial uint ResumeThread(SafeFileHandle hThread);
 }

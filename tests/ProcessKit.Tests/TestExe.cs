@@ -37,6 +37,33 @@ static class TestExe
 		? new ProcessStartInfo("ping", ["-n", ((int)Math.Ceiling(seconds) + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), "127.0.0.1"]) { CreateNoWindow = true, UseShellExecute = false }
 		: Shell($"sleep {seconds.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
 
+	/// <summary>
+	/// Spawns a process that emits <paramref name="text"/> + newline every <paramref name="intervalSeconds"/>
+	/// for <paramref name="count"/> iterations. Used by suspend/resume tests to measure flow with
+	/// vs without freeze.
+	/// </summary>
+	internal static ProcessStartInfo PeriodicEcho(string text, double intervalSeconds, int count)
+	{
+		ProcessStartInfo psi;
+		if (_sIsWindows)
+		{
+			// PowerShell loop — cmd's `ping -w` timing is too unreliable at sub-second granularity.
+			// Use [Console]::Out.WriteLine + Flush instead of Write-Output: when stdout is a
+			// redirected pipe (as it is here), pwsh's host applies block buffering and short lines
+			// like "tick" never flush until process exit, which would make suspend/resume tests
+			// non-deterministic. Console + explicit Flush forces per-line visibility.
+			var script = $"for($i=0;$i -lt {count};$i++){{[Console]::Out.WriteLine('{text}');[Console]::Out.Flush();Start-Sleep -Milliseconds {(int)(intervalSeconds * 1000)}}}";
+			psi = new ProcessStartInfo("powershell", ["-NoProfile", "-Command", script]) { CreateNoWindow = true, UseShellExecute = false };
+		}
+		else
+		{
+			var sleepArg = intervalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+			psi = Shell($"i=0; while [ $i -lt {count} ]; do printf '%s\\n' {EscapeForSh(text)}; sleep {sleepArg}; i=$((i+1)); done");
+		}
+		psi.RedirectStandardOutput = true;
+		return psi;
+	}
+
 	internal static ProcessStartInfo EchoStdin() => _sIsWindows
 		// 'findstr "^"' echoes stdin line-by-line; cleaner than 'more'.
 		? new ProcessStartInfo("findstr", ["^"]) { CreateNoWindow = true, UseShellExecute = false }

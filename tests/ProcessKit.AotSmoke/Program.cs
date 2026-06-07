@@ -69,6 +69,37 @@ if (echoed != "interactive-aot")
 	return 1;
 }
 
+// Exercise the Phase 2 surface: Mechanism property, GetMembersAsync, SignalAsync (Term — on Unix the
+// child handles it gracefully; on Windows non-Kill throws, so use Kill there).
+var mechanism = group.Mechanism;
+if (mechanism is not (Mechanism.JobObject or Mechanism.ProcessGroup))
+{
+	Console.Error.WriteLine($"AOT smoke FAIL: unexpected mechanism {mechanism}");
+	return 1;
+}
+
+await using (var phase2Group = new ProcessGroup())
+{
+	var sleeperPsi = OperatingSystem.IsWindows()
+		? new ProcessStartInfo("ping", ["-n", "5", "127.0.0.1"]) { CreateNoWindow = true, UseShellExecute = false }
+		: new ProcessStartInfo("/bin/sh", ["-c", "sleep 5"]);
+	var sleeper = phase2Group.Start(sleeperPsi);
+
+	var members = await phase2Group.GetMembersAsync();
+	if (!members.Contains(sleeper.Id))
+	{
+		Console.Error.WriteLine($"AOT smoke FAIL: GetMembersAsync did not include pid {sleeper.Id}; got [{string.Join(",", members)}]");
+		return 1;
+	}
+
+	await phase2Group.SignalAsync(OperatingSystem.IsWindows() ? Signal.Kill : Signal.Term);
+	if (!sleeper.WaitForExit(5000))
+	{
+		Console.Error.WriteLine("AOT smoke FAIL: SignalAsync did not terminate the sleeper within 5 s.");
+		return 1;
+	}
+}
+
 // Dispose the group explicitly here so the processkit.group.shutdown span fires before we read
 // capturedActivities — the `using` declaration above would otherwise dispose after the check.
 group.Dispose();
